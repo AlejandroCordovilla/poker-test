@@ -38,8 +38,8 @@ pub struct Score {
     pub verdict: Verdict,
 }
 
-fn by_loss(loss: f64) -> Verdict {
-    if loss <= 0.05 {
+fn by_loss(loss: f64, tol: f64) -> Verdict {
+    if loss <= tol {
         Verdict::Fine
     } else if loss <= 0.25 {
         Verdict::Inaccuracy
@@ -51,7 +51,10 @@ fn by_loss(loss: f64) -> Verdict {
 }
 
 /// `ev_bb[a]`: EV of action `a` for this hand, in bb. `freq[a]`: solver frequency for this hand.
-pub fn score(ev_bb: &[f64], freq: &[f64], chosen: usize) -> Score {
+/// `pot_bb` sets the noise tolerance: solves stop at 0.5% of the pot, so EV gaps under 1% of
+/// the pot between actions the solver actually plays are treated as equal.
+pub fn score(ev_bb: &[f64], freq: &[f64], chosen: usize, pot_bb: f64) -> Score {
+    let tol = (0.01 * pot_bb).max(0.05);
     assert_eq!(ev_bb.len(), freq.len());
     assert!(chosen < ev_bb.len());
     let best = (0..ev_bb.len()).max_by(|&a, &b| ev_bb[a].partial_cmp(&ev_bb[b]).unwrap()).unwrap();
@@ -59,11 +62,11 @@ pub fn score(ev_bb: &[f64], freq: &[f64], chosen: usize) -> Score {
     let rare = freq[chosen] < RARE_ACTION;
     let mixed = freq.iter().filter(|&&f| f >= RARE_ACTION).count() >= 2;
     let verdict = if rare {
-        by_loss(loss).max(Verdict::Mistake)
+        by_loss(loss, 0.05).max(Verdict::Mistake)
     } else if chosen == best || loss <= 0.01 {
         Verdict::Best
     } else {
-        by_loss(loss)
+        by_loss(loss, tol)
     };
     Score { best, ev_loss_bb: loss, rare, mixed, verdict }
 }
@@ -88,7 +91,7 @@ mod tests {
 
     #[test]
     fn best_action_is_best() {
-        let s = score(&[1.0, 2.0, 0.5], &[0.1, 0.9, 0.0], 1);
+        let s = score(&[1.0, 2.0, 0.5], &[0.1, 0.9, 0.0], 1, 5.0);
         assert_eq!(s.verdict, Verdict::Best);
         assert_eq!(s.ev_loss_bb, 0.0);
     }
@@ -98,14 +101,16 @@ mod tests {
         // solver splits 40/60 with near-equal EV: either choice is fine
         let ev = [1.000, 1.004];
         let f = [0.4, 0.6];
-        assert_eq!(score(&ev, &f, 0).verdict, Verdict::Best);
-        assert_eq!(score(&ev, &f, 1).verdict, Verdict::Best);
-        assert!(score(&ev, &f, 0).mixed);
+        assert_eq!(score(&ev, &f, 0, 5.0).verdict, Verdict::Best);
+        assert_eq!(score(&ev, &f, 1, 5.0).verdict, Verdict::Best);
+        assert!(score(&ev, &f, 0, 5.0).mixed);
+        // solver noise: 0.19bb gap in a 20bb pot between two played actions is fine
+        assert_eq!(score(&[30.34, 30.15], &[0.6, 0.4], 1, 20.5).verdict, Verdict::Fine);
     }
 
     #[test]
     fn rare_action_is_a_mistake_even_with_close_ev() {
-        let s = score(&[1.0, 0.98], &[0.97, 0.03], 1);
+        let s = score(&[1.0, 0.98], &[0.97, 0.03], 1, 20.0);
         assert!(s.rare);
         assert_eq!(s.verdict, Verdict::Mistake);
         assert!((s.ev_loss_bb - 0.02).abs() < 1e-9);
@@ -114,11 +119,14 @@ mod tests {
     #[test]
     fn graded_by_ev_loss() {
         let f = [0.5, 0.5];
-        assert_eq!(score(&[1.0, 0.97], &f, 1).verdict, Verdict::Fine);
-        assert_eq!(score(&[1.0, 0.8], &f, 1).verdict, Verdict::Inaccuracy);
-        assert_eq!(score(&[1.0, 0.0], &f, 1).verdict, Verdict::Mistake);
-        assert_eq!(score(&[3.0, 0.0], &f, 1).verdict, Verdict::Blunder);
-        assert_eq!(score(&[3.0, 0.0], &[1.0, 0.0], 1).verdict, Verdict::Blunder); // rare + big loss
+        assert_eq!(score(&[1.0, 0.97], &f, 1, 5.0).verdict, Verdict::Fine);
+        assert_eq!(score(&[1.0, 0.8], &f, 1, 5.0).verdict, Verdict::Inaccuracy);
+        assert_eq!(score(&[1.0, 0.0], &f, 1, 5.0).verdict, Verdict::Mistake);
+        assert_eq!(score(&[3.0, 0.0], &f, 1, 5.0).verdict, Verdict::Blunder);
+        assert_eq!(score(&[3.0, 0.0], &[1.0, 0.0], 1, 5.0).verdict, Verdict::Blunder); // rare + big loss
+        // tolerance grows with the pot: 0.3bb is noise in a 40bb pot, not in a 5bb pot
+        assert_eq!(score(&[10.0, 9.7], &f, 1, 40.0).verdict, Verdict::Fine);
+        assert_eq!(score(&[10.0, 9.7], &f, 1, 5.0).verdict, Verdict::Mistake);
     }
 
     #[test]

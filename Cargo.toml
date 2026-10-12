@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/poker-core", "crates/preflop", "crates/solver-api", "crates/solver-pfs", "crates/solve-cli", "crates/trainer"]
+members = ["crates/poker-core", "crates/preflop", "crates/solver-api", "crates/solver-pfs", "crates/solve-cli", "crates/trainer", "app/src-tauri"]
 exclude = ["bench"]
 
 [workspace.dependencies]

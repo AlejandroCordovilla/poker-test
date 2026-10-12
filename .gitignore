@@ -10,3 +10,8 @@ data/solver.log
 
 # personal notes, player names and real-game stats: never published
 docs/PRIVATE-NOTES.md
+
+/data/trainer.sqlite
+app/node_modules/
+app/dist/
+app/src-tauri/gen/

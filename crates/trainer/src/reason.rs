@@ -84,7 +84,7 @@ pub fn explain(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, h
         out.push(format!("The solver mixes with this hand ({}), so close options cost little.", mix.join(", ")));
     }
     // range context
-    let r: Vec<String> = acts.iter().filter(|a| a.freq_range >= 0.05).map(|a| format!("{} {}", a.label.split(' ').next().unwrap_or(""), pct(a.freq_range))).collect();
+    let r: Vec<String> = acts.iter().filter(|a| a.freq_range >= 0.05).map(|a| format!("{} {}", a.label.split(" (").next().unwrap_or(""), pct(a.freq_range))).collect();
     out.push(format!("Across all hands here the solver plays: {}.", r.join(", ")));
     out.join(" ")
 }

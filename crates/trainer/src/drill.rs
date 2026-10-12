@@ -312,7 +312,7 @@ impl Engine {
         let range = scoring::range_freqs(&strat, &weights, n_actions);
         let ev_bb: Vec<f64> = (0..n_actions).map(|a| evd[a * nh + h] as f64 / BB).collect();
         let freq: Vec<f64> = (0..n_actions).map(|a| strat[a * nh + h] as f64).collect();
-        let score = scoring::score(&ev_bb, &freq, chosen);
+        let score = scoring::score(&ev_bb, &freq, chosen, cur.view.pot_bb);
         let equity = mc_equity([c1, c2], &board, &villain_cards, &villain_w, 4000, &mut self.rng);
         let hand_desc = describe([c1, c2], &board);
         let actions: Vec<ActionResult> = (0..n_actions)
