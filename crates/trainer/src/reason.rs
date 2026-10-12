@@ -71,6 +71,11 @@ pub fn explain(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, h
     };
     out.push(main);
 
+    if let Some(r) = s.rng {
+        if s.target != s.best || chosen != s.target {
+            out.push(format!("RNG {r}: the roll picks {} from the solver's mix for this hand.", acts[s.target].label));
+        }
+    }
     // what the player chose
     if chosen != s.best {
         if ck == bk && ck == "bet" {

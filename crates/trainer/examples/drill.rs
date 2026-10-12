@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
     let mut e = Engine::new(std::path::Path::new("data"), seed);
     println!("{} solved spots", e.spots().len());
     let t = std::time::Instant::now();
-    let v = e.new_drill(&Filters::default())?;
+    let v = e.new_drill(&Filters::default(), trainer::drill::Mode::Spot)?;
     println!("built in {:.2}s", t.elapsed().as_secs_f64());
     println!("{}bb {} ({}) | {} | board {} [{}]", v.stack, v.matchup, v.pot_type, v.preflop, v.board.join(" "), v.texture);
     println!("line: {}", if v.line.is_empty() { "-".into() } else { v.line.join(", ") });
@@ -17,7 +17,7 @@ fn main() -> anyhow::Result<()> {
         println!("  [{}] {}", a.index, a.label);
     }
     let t = std::time::Instant::now();
-    let f = e.answer(pick.unwrap_or(0))?;
+    let f = e.answer(pick.unwrap_or(0), None)?;
     println!("graded in {:.2}s", t.elapsed().as_secs_f64());
     println!("-> {} (EV loss {:.2}bb){}", f.verdict, f.score.ev_loss_bb, if f.score.rare { ", rare action" } else { "" });
     for a in &f.actions {

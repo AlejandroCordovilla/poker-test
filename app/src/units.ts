@@ -26,7 +26,13 @@ export function money(x: number, u: Units, digits = 1): string {
 /** Rewrites every "12.5bb" inside engine text (action labels, lines, reasons). */
 export function convertText(s: string, u: Units): string {
   const SUITS: Record<string, string> = { s: "♠", h: "♥", d: "♦", c: "♣" };
-  s = s.replace(/\bTurn ([2-9TJQKA])([shdc])\b/g, (_, r, su) => `Turn ${r === "T" ? "10" : r}${SUITS[su]}`);
+  s = s.replace(/\b(Turn|River) ([2-9TJQKA])([shdc])\b/g, (_, w, r, su) => `${w} ${r === "T" ? "10" : r}${SUITS[su]}`);
   if (u.mode === "bb") return s;
   return s.replace(/(-?\d+(?:\.\d+)?)bb\b/g, (_, n) => money(parseFloat(n), u));
+}
+
+/** "AcQd" -> "A♣Q♦" (leaves already-pretty text alone). */
+export function prettyCards(s: string): string {
+  const SUITS: Record<string, string> = { s: "♠", h: "♥", d: "♦", c: "♣" };
+  return s.replace(/([2-9TJQKA])([shdc])/g, (_, r, su) => `${r === "T" ? "10" : r}${SUITS[su]}`);
 }

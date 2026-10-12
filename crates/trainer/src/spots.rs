@@ -18,6 +18,8 @@ pub struct SpotInfo {
     pub preflop_aggressor: String,
     pub pot_bb: f64,
     pub stack_bb: f64,
+    pub river_bet: String,
+    pub river_raise: String,
 }
 
 /// Postflop order SB, BB, then the rest.
@@ -59,6 +61,8 @@ pub fn load(data: &Path) -> Vec<SpotInfo> {
             ip,
             pot_bb: j["spot"]["pot_bb"].as_f64().unwrap_or(0.0),
             stack_bb: j["spot"]["stack_bb"].as_f64().unwrap_or(0.0),
+            river_bet: j["spot"]["sizes"]["river_bet"].as_str().unwrap_or("75%, a").to_string(),
+            river_raise: j["spot"]["sizes"]["river_raise"].as_str().unwrap_or("a").to_string(),
         });
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));

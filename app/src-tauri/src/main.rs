@@ -4,7 +4,8 @@
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use trainer::db::{Db, Summary};
+use trainer::db::{AttemptRow, Context, Db, LeakReport, Summary};
+use trainer::drill::{Mode, Step};
 use trainer::{DrillView, Engine, Feedback, Filters};
 
 struct AppState {
@@ -49,7 +50,7 @@ fn meta(state: tauri::State<AppState>) -> Meta {
 }
 
 #[tauri::command]
-fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String) -> Result<DrillView, String> {
+fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String, game_mode: Option<Mode>) -> Result<DrillView, String> {
     let mut f = filters;
     if mode == "leaks" {
         let db = state.db.lock().unwrap();
@@ -60,7 +61,7 @@ fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String) -> R
             None => return Err("Not enough history yet: do at least 5 drills in a spot type first.".into()),
         }
     }
-    let r = state.engine.lock().unwrap().new_drill(&f).map_err(err);
+    let r = state.engine.lock().unwrap().new_drill(&f, game_mode.unwrap_or_default()).map_err(err);
     match &r {
         Ok(v) => eprintln!("[ui] drill dealt: {} {} board {}", v.spot_id, v.hand.join(""), v.board.join("")),
         Err(e) => eprintln!("[ui] drill error: {e}"),
@@ -69,17 +70,41 @@ fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String) -> R
 }
 
 #[tauri::command]
-fn answer(state: tauri::State<AppState>, index: usize) -> Result<Feedback, String> {
+fn answer(state: tauri::State<AppState>, index: usize, rng: Option<u32>) -> Result<Feedback, String> {
     let mut e = state.engine.lock().unwrap();
     let view = e.current().cloned().ok_or("no drill in progress")?;
-    let fb = e.answer(index).map_err(err)?;
-    state.db.lock().unwrap().record(&view, &fb, "drill", None).map_err(err)?;
+    let (history, hero_cards) = e.current_context().ok_or("no drill in progress")?;
+    let fb = e.answer(index, rng).map_err(err)?;
+    let ctx = Context { source: "drill".into(), opponent: None, history, hero_cards: Some(hero_cards) };
+    state.db.lock().unwrap().record(&view, &fb, &ctx).map_err(err)?;
     Ok(fb)
+}
+
+#[tauri::command]
+fn continue_hand(state: tauri::State<AppState>) -> Result<Step, String> {
+    state.engine.lock().unwrap().continue_hand().map_err(err)
 }
 
 #[tauri::command]
 fn summary(state: tauri::State<AppState>) -> Result<Summary, String> {
     state.db.lock().unwrap().summary().map_err(err)
+}
+
+#[tauri::command]
+fn leaks(state: tauri::State<AppState>, source: Option<String>, opponent: Option<String>) -> Result<LeakReport, String> {
+    state.db.lock().unwrap().leaks(source.as_deref(), opponent.as_deref()).map_err(err)
+}
+
+#[tauri::command]
+fn attempts(state: tauri::State<AppState>, stat: Option<String>, source: Option<String>, opponent: Option<String>) -> Result<Vec<AttemptRow>, String> {
+    state.db.lock().unwrap().attempts(stat.as_deref(), source.as_deref(), opponent.as_deref(), 200).map_err(err)
+}
+
+#[tauri::command]
+fn redrill(state: tauri::State<AppState>, id: i64) -> Result<DrillView, String> {
+    let info = state.db.lock().unwrap().redrill_info(id).map_err(err)?;
+    let (spot, hist, cards) = info.ok_or("this decision can't be re-drilled (river spots are solved live)")?;
+    state.engine.lock().unwrap().redrill(&spot, &hist, &cards).map_err(err)
 }
 
 fn main() {
@@ -88,7 +113,7 @@ fn main() {
     let db = Db::open(&data.join("trainer.sqlite")).expect("open database");
     tauri::Builder::default()
         .manage(AppState { engine: Mutex::new(Engine::new(&data, seed)), db: Mutex::new(db) })
-        .invoke_handler(tauri::generate_handler![meta, new_drill, answer, summary])
+        .invoke_handler(tauri::generate_handler![meta, new_drill, answer, continue_hand, summary, leaks, attempts, redrill])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
