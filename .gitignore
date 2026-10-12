@@ -15,3 +15,6 @@ docs/PRIVATE-NOTES.md
 app/node_modules/
 app/dist/
 app/src-tauri/gen/
+
+# private notes, player data and REA notes: never published
+/private/

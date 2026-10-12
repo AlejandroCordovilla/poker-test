@@ -35,6 +35,7 @@ fn err(e: impl std::fmt::Display) -> String {
 fn meta(state: tauri::State<AppState>) -> Meta {
     let mut e = state.engine.lock().unwrap();
     e.refresh_spots();
+    eprintln!("[ui] page loaded, {} solved spots", e.spots().len());
     let s = e.spots();
     let mut m = Meta { spots: s.len(), stacks: vec![], matchups: vec![], pot_types: vec![], textures: vec![] };
     for x in s {
@@ -59,7 +60,12 @@ fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String) -> R
             None => return Err("Not enough history yet: do at least 5 drills in a spot type first.".into()),
         }
     }
-    state.engine.lock().unwrap().new_drill(&f).map_err(err)
+    let r = state.engine.lock().unwrap().new_drill(&f).map_err(err);
+    match &r {
+        Ok(v) => eprintln!("[ui] drill dealt: {} {} board {}", v.spot_id, v.hand.join(""), v.board.join("")),
+        Err(e) => eprintln!("[ui] drill error: {e}"),
+    }
+    r
 }
 
 #[tauri::command]
