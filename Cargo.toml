@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = ["crates/poker-core", "crates/preflop", "crates/solver-api", "crates/solver-pfs", "crates/solve-cli", "crates/trainer"]
+exclude = ["bench"]
+
+[workspace.dependencies]
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+
+[profile.test]
+opt-level = 3

@@ -1,0 +1,52 @@
+# Solves the Milestone 1 batch on GitHub-hosted runners (free for public repos).
+# Run from the Actions tab or: gh workflow run solve.yml
+# Download results locally with scripts/fetch-solutions.sh
+name: solve
+
+on:
+  workflow_dispatch:
+    inputs:
+      shards:
+        description: "number of shards (machines); 20 run at once"
+        default: "60"
+
+jobs:
+  matrix:
+    runs-on: ubuntu-latest
+    outputs:
+      list: ${{ steps.m.outputs.list }}
+    steps:
+      - id: m
+        run: echo "list=$(python3 -c "import json;print(json.dumps(list(range(int('${{ inputs.shards }}')))))")" >> "$GITHUB_OUTPUT"
+
+  solve:
+    needs: matrix
+    runs-on: ubuntu-latest
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      max-parallel: 20
+      matrix:
+        shard: ${{ fromJson(needs.matrix.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p solve-cli
+      - name: Plan (deterministic, same ids as local)
+        run: |
+          ./target/release/solve ranges
+          ./target/release/solve flops
+          ./target/release/solve plan
+          ./target/release/solve estimate --pilot 0
+      - name: Solve shard
+        run: ./target/release/solve shard --index ${{ matrix.shard }} --of ${{ inputs.shards }} --max-minutes 300 --skip-file data/done.txt
+      - name: Upload solutions
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: solutions-${{ matrix.shard }}
+          path: data/solutions/
+          if-no-files-found: ignore
+          retention-days: 14

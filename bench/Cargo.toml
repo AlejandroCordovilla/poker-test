@@ -1,0 +1,12 @@
+[package]
+name = "solver-bench"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+postflop-solver = { git = "https://github.com/b-inary/postflop-solver", features = ["zstd"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1

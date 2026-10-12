@@ -1,0 +1,13 @@
+[package]
+name = "solver-pfs"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+solver-api = { path = "../solver-api" }
+anyhow.workspace = true
+postflop-solver = { git = "https://github.com/b-inary/postflop-solver", features = ["zstd"] }
+# postflop-solver is frozen on a bincode prerelease; newer 2.0.x breaks it. Pin it here.
+bincode = "=2.0.0-rc.3"
+bincode_derive = "=2.0.0-rc.3"
+virtue = "=0.0.13"

@@ -1,0 +1,13 @@
+[package]
+name = "trainer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+poker-core = { path = "../poker-core" }
+solver-pfs = { path = "../solver-pfs" }
+postflop-solver = { git = "https://github.com/b-inary/postflop-solver", features = ["zstd"] }
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+rusqlite = { version = "0.32", features = ["bundled"] }

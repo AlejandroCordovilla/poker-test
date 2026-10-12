@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solver Progress</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1d2320; --muted: #6b726e; --line: #e2e0d8;
+    --accent: #3f6b4f; --accent-soft: #dfe9e2; --warn: #a5622d; --bad: #a33b3b;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #141716; --card: #1d2120; --ink: #e8ebe9; --muted: #9aa29e; --line: #2c3230;
+      --accent: #7fb08f; --accent-soft: #24342b; --warn: #d9945c; --bad: #e07a7a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif; }
+  main { max-width: 880px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .big { display: flex; gap: 28px; flex-wrap: wrap; align-items: baseline; }
+  .stat .v { font-size: 30px; font-weight: 650; font-variant-numeric: tabular-nums; }
+  .stat .l { color: var(--muted); font-size: 13px; }
+  .bar { height: 10px; background: var(--accent-soft); border-radius: 6px; overflow: hidden; margin-top: 14px; }
+  .bar > div { height: 100%; background: var(--accent); transition: width .6s; }
+  .bar.small { height: 6px; margin-top: 6px; }
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+  button { font: inherit; border: 1px solid var(--line); background: var(--card); color: var(--ink); padding: 8px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.on { background: var(--accent-soft); border-color: var(--accent); }
+  button.danger { color: var(--bad); }
+  .sep { width: 1px; height: 26px; background: var(--line); margin: 0 4px; }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 13px; font-weight: 600; }
+  .pill.run { background: var(--accent-soft); color: var(--accent); }
+  .pill.pause { background: #f3e6d9; color: var(--warn); }
+  @media (prefers-color-scheme: dark) { .pill.pause { background: #3a2c20; } }
+  .pill.done { background: var(--accent); color: #fff; }
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  td, th { text-align: left; padding: 6px 4px; border-bottom: 1px solid var(--line); font-size: 14px; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; }
+  .job { padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .job:last-child { border-bottom: 0; }
+  .muted { color: var(--muted); }
+  .log { font: 12.5px/1.6 ui-monospace, Menlo, monospace; color: var(--muted); max-height: 220px; overflow: auto; }
+  h2 { font-size: 15px; margin: 0 0 10px; }
+  .err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Solver progress</h1>
+  <div class="sub">Poker trainer, Milestone 1 batch. <span id="state" class="pill run">starting</span></div>
+
+  <div class="card">
+    <div class="big">
+      <div class="stat"><div class="v" id="pct">-</div><div class="l">done (by work)</div></div>
+      <div class="stat"><div class="v" id="left">-</div><div class="l">estimated time left at this speed</div></div>
+      <div class="stat"><div class="v" id="jobs">-</div><div class="l">spots solved</div></div>
+    </div>
+    <div class="bar"><div id="barfill" style="width:0%"></div></div>
+  </div>
+
+  <div class="card controls">
+    <button id="toggle" class="primary">Pause</button>
+    <div class="sep"></div>
+    <span class="muted">Speed</span>
+    <button data-speed="100">Full</button>
+    <button data-speed="50">Half</button>
+    <button data-speed="25">Quarter</button>
+    <div class="sep"></div>
+    <button id="stop" class="danger">Stop</button>
+  </div>
+
+  <div class="card">
+    <h2>Solving now</h2>
+    <div id="running" class="muted">nothing</div>
+  </div>
+
+  <div class="card">
+    <h2>By spot</h2>
+    <table><thead><tr><th>Spot (in solve order)</th><th class="num">Solved</th></tr></thead><tbody id="groups"></tbody></table>
+  </div>
+
+  <div class="card">
+    <h2>Activity</h2>
+    <div id="log" class="log"></div>
+  </div>
+</main>
+<script>
+const $ = (id) => document.getElementById(id);
+let last = null;
+function fmtHours(h) {
+  if (!isFinite(h)) return "-";
+  if (h < 1/60) return "< 1 min";
+  if (h < 1) return Math.round(h * 60) + " min";
+  const H = Math.floor(h), M = Math.round((h - H) * 60);
+  return H + " h " + (M ? M + " min" : "");
+}
+async function post(path) {
+  try { await fetch(path, { method: "POST" }); } catch (e) {}
+  refresh();
+}
+async function refresh() {
+  let s;
+  try { s = await (await fetch("/api/status")).json(); }
+  catch (e) { $("state").textContent = "not running"; $("state").className = "pill pause"; return; }
+  last = s;
+  $("pct").textContent = s.percent.toFixed(1) + "%";
+  $("barfill").style.width = Math.max(0, Math.min(100, s.percent)) + "%";
+  $("left").textContent = s.finished ? "done" : (s.controls.paused ? "paused" : fmtHours(s.hours_left));
+  $("jobs").textContent = s.done_jobs + " / " + s.total_jobs;
+  const st = $("state");
+  if (s.finished) { st.textContent = "finished"; st.className = "pill done"; }
+  else if (s.stopping) { st.textContent = "stopping"; st.className = "pill pause"; }
+  else if (s.controls.paused) { st.textContent = "paused"; st.className = "pill pause"; }
+  else { st.textContent = "solving at " + Math.round(s.controls.speed * 100) + "%"; st.className = "pill run"; }
+  $("toggle").textContent = s.controls.paused ? "Resume" : "Pause";
+  document.querySelectorAll("[data-speed]").forEach(b => b.classList.toggle("on", Math.round(s.controls.speed * 100) == b.dataset.speed));
+  const run = Object.values(s.running);
+  $("running").innerHTML = run.length ? run.map(r => `
+    <div class="job"><div>${r.id} <span class="muted">· ${r.mem_gb.toFixed(1)} GB · round ${r.iteration} · ${r.exploitability_pct ? "error " + r.exploitability_pct.toFixed(1) + "% of pot, done at " + r.target_pct + "%" : "starting"}</span></div>
+    <div class="bar small"><div style="width:${(r.progress * 100).toFixed(0)}%"></div></div></div>`).join("") : '<span class="muted">nothing</span>';
+  $("groups").innerHTML = s.groups.map(([k, d, t]) =>
+    `<tr><td>${k}</td><td class="num">${d} / ${t}</td></tr>`).join("");
+  $("log").innerHTML = s.log.map(l => `<div class="${l.includes("FAILED") ? "err" : ""}">${l}</div>`).join("");
+}
+$("toggle").onclick = () => post(last && last.controls.paused ? "/api/resume" : "/api/pause");
+document.querySelectorAll("[data-speed]").forEach(b => b.onclick = () => post("/api/speed/" + b.dataset.speed));
+$("stop").onclick = () => { if (confirm("Stop solving? Finished spots are kept; the ones in progress restart next time.")) post("/api/stop"); };
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>

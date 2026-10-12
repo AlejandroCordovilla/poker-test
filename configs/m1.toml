@@ -1,0 +1,26 @@
+# Milestone 1 batch. All three matchups come from the 3-handed preflop solve (the target
+# games are 3-5 handed; BTN vs BB and SB vs BB are identical to 6-max once earlier seats fold).
+# CO vs BTN (6-max) was swapped for BTN vs SB on 2026-10-11.
+stacks = [50, 100, 40]  # 50bb first: the PokerNow buy-in; 100bb for deep stacks
+pot_types = ["srp", "3bp"]
+flops = 75
+deep_flops = 40  # 100bb trees are about 4x bigger
+preflop_iterations = 3000
+equity_samples = 20000
+target_exploitability_pct = 0.5
+max_iterations = 1000
+
+[[matchup]]
+table = 3
+opener = "BTN"
+responder = "BB"
+
+[[matchup]]
+table = 3
+opener = "SB"
+responder = "BB"
+
+[[matchup]]
+table = 3
+opener = "BTN"
+responder = "SB"

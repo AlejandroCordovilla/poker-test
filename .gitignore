@@ -1,0 +1,12 @@
+target/
+/data/solutions/
+*.bin
+.DS_Store
+node_modules/
+__pycache__/
+/data/plan.json
+data/solver.log
+/data/run-control.json
+
+# personal notes, player names and real-game stats: never published
+docs/PRIVATE-NOTES.md
