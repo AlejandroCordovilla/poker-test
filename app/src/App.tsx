@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, DrillView, Feedback, Filters, Meta, Summary } from "./api";
 import { Card } from "./Card";
+import { convertText, loadUnits, money, saveUnits, Units } from "./units";
 
 type Mode = "random" | "focused" | "leaks";
 const EMPTY: Filters = { stacks: [], matchups: [], pot_types: [], streets: [], textures: [] };
@@ -38,6 +39,10 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const [session, setSession] = useState({ n: 0, loss: 0, good: 0 });
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [units, setUnitsState] = useState<Units>(loadUnits);
+  const setUnits = (u: Units) => { setUnitsState(u); saveUnits(u); };
+  const m = (x: number, d = 1) => money(x, units, d);
+  const t = (s: string) => convertText(s, units);
 
   useEffect(() => { api.meta().then(setMeta).catch((e) => setError(String(e))); }, []);
 
@@ -88,8 +93,21 @@ export default function App() {
         </nav>
         <div className="session">
           {session.n > 0
-            ? <>{session.n} this session · avg loss {(session.loss / session.n).toFixed(2)}bb · {Math.round((100 * session.good) / session.n)}% good</>
+            ? <>{session.n} this session · avg loss {m(session.loss / session.n, 2)} · {Math.round((100 * session.good) / session.n)}% good</>
             : meta ? <>{meta.spots} solved spots</> : null}
+        </div>
+        <div className="units">
+          <div className="seg small">
+            <button className={units.mode === "bb" ? "on" : ""} onClick={() => setUnits({ ...units, mode: "bb" })}>bb</button>
+            <button className={units.mode === "$" ? "on" : ""} onClick={() => setUnits({ ...units, mode: "$" })}>$</button>
+          </div>
+          {units.mode === "$" && (
+            <label className="bbval">
+              BB = $
+              <input type="number" min="0.01" step="0.05" value={units.bb}
+                onChange={(e) => { const v = parseFloat(e.target.value); if (v > 0) setUnits({ ...units, bb: v }); }} />
+            </label>
+          )}
         </div>
       </header>
 
@@ -123,22 +141,22 @@ export default function App() {
             {drill && (
               <>
                 <div className="spot-head">
-                  <div className="spot-title">{drill.stack}bb · {drill.matchup} · {POT_NAME[drill.pot_type]}</div>
+                  <div className="spot-title">{units.mode === "$" ? `$${(drill.stack * units.bb).toFixed(0)} stacks` : `${drill.stack}bb`} · {drill.matchup} · {POT_NAME[drill.pot_type]}</div>
                   <div className="spot-sub">Preflop: {drill.preflop}. {drill.texture} board.</div>
                 </div>
 
                 <div className="table">
-                  <div className="seat villain">{drill.villain} · {drill.villain_stack_bb.toFixed(1)}bb</div>
-                  <div className="pot">Pot {drill.pot_bb.toFixed(1)}bb</div>
+                  <div className="seat villain">{drill.villain} · {m(drill.villain_stack_bb)}</div>
+                  <div className="pot">Pot {m(drill.pot_bb)}</div>
                   <div className="board">{drill.board.map((c) => <Card key={c} card={c} size="lg" />)}</div>
-                  <div className="line">{drill.line.length ? drill.line.join(" → ") : `${drill.street === "flop" ? "Flop" : "Turn"}: you act first`}</div>
+                  <div className="line">{drill.line.length ? t(drill.line.join(" → ")) : `${drill.street === "flop" ? "Flop" : "Turn"}: you act first`}</div>
                   <div className="hero">
                     <div className="hand">{drill.hand.map((c) => <Card key={c} card={c} size="lg" />)}</div>
-                    <div className="seat">You: {drill.hero} ({drill.hero_in_position ? "in position" : "out of position"}) · {drill.hero_stack_bb.toFixed(1)}bb</div>
+                    <div className="seat">You: {drill.hero} ({drill.hero_in_position ? "in position" : "out of position"}) · {m(drill.hero_stack_bb)}</div>
                   </div>
                 </div>
 
-                <div className="prompt">{drill.node_type === "facing a bet" || drill.node_type === "facing a raise" ? `Facing ${drill.to_call_bb.toFixed(1)}bb to call.` : drill.node_type === "checked to" ? "Checked to you." : "You're first to act."} What do you do?</div>
+                <div className="prompt">{drill.node_type === "facing a bet" || drill.node_type === "facing a raise" ? `Facing ${m(drill.to_call_bb)} to call.` : drill.node_type === "checked to" ? "Checked to you." : "You're first to act."} What do you do?</div>
                 <div className="actions">
                   {drill.actions.map((a) => {
                     const r = fb?.actions[a.index];
@@ -146,7 +164,7 @@ export default function App() {
                     return (
                       <button key={a.index} className={`action ${a.kind} ${cls}`} disabled={!!fb} onClick={() => choose(a.index)}>
                         <span className="key">{a.index + 1}</span>
-                        <span>{a.label}</span>
+                        <span>{t(a.label)}</span>
                         {r && <span className="freq">{Math.round(r.freq_hand * 100)}%</span>}
                       </button>
                     );
@@ -157,7 +175,7 @@ export default function App() {
                   <div className="feedback">
                     <div className={`verdict ${VERDICT_CLASS[fb.verdict]}`}>
                       <span className="v">{fb.verdict}</span>
-                      <span>{fb.score.ev_loss_bb < 0.005 ? "no EV lost" : `lost ${fb.score.ev_loss_bb.toFixed(2)}bb`}</span>
+                      <span>{fb.score.ev_loss_bb < 0.005 ? "no EV lost" : `lost ${m(fb.score.ev_loss_bb, 2)}`}</span>
                       {fb.score.rare && <span className="tag">solver almost never does this</span>}
                       {fb.score.mixed && <span className="tag">mixed spot</span>}
                     </div>
@@ -167,15 +185,15 @@ export default function App() {
                       <tbody>
                         {fb.actions.map((a, i) => (
                           <tr key={i} className={i === fb.score.best ? "best" : i === fb.chosen ? "chosen" : ""}>
-                            <td>{a.label}{i === fb.chosen ? " (you)" : ""}</td>
-                            <td className="num">{a.ev_bb.toFixed(2)}bb</td>
+                            <td>{t(a.label)}{i === fb.chosen ? " (you)" : ""}</td>
+                            <td className="num">{m(a.ev_bb, 2)}</td>
                             <td><div className="bar"><div style={{ width: `${a.freq_hand * 100}%` }} /></div><span className="pct">{Math.round(a.freq_hand * 100)}%</span></td>
                             <td><div className="bar range"><div style={{ width: `${a.freq_range * 100}%` }} /></div><span className="pct">{Math.round(a.freq_range * 100)}%</span></td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
-                    <p className="reason">{fb.reason}</p>
+                    <p className="reason">{t(fb.reason)}</p>
                     <button className="primary" onClick={next}>Next hand ↵</button>
                   </div>
                 )}
@@ -190,7 +208,7 @@ export default function App() {
             <>
               <div className="stats">
                 <div><div className="v">{summary.attempts}</div><div className="l">decisions graded</div></div>
-                <div><div className="v">{summary.avg_loss_bb.toFixed(2)}bb</div><div className="l">average EV loss</div></div>
+                <div><div className="v">{m(summary.avg_loss_bb, 2)}</div><div className="l">average EV loss</div></div>
                 <div><div className="v">{Math.round(summary.best_or_fine_pct)}%</div><div className="l">best or fine</div></div>
               </div>
               <h3>Where you lose the most</h3>
@@ -198,7 +216,7 @@ export default function App() {
                 <thead><tr><th>Spot type</th><th className="num">Hands</th><th className="num">Avg loss</th></tr></thead>
                 <tbody>
                   {summary.by_category.map((c) => (
-                    <tr key={c.category}><td>{c.category}</td><td className="num">{c.n}</td><td className="num">{c.avg_loss_bb.toFixed(2)}bb</td></tr>
+                    <tr key={c.category}><td>{c.category}</td><td className="num">{c.n}</td><td className="num">{m(c.avg_loss_bb, 2)}</td></tr>
                   ))}
                 </tbody>
               </table>
