@@ -3,6 +3,8 @@
 
 pub mod db;
 pub mod drill;
+pub mod import;
+pub mod ranges;
 pub mod reason;
 pub mod scoring;
 pub mod spots;

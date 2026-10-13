@@ -136,7 +136,7 @@ pub struct AttemptRow {
 
 /// Stat definitions: (key, name, SQL condition on the situation, action predicate, solver column).
 const STATS: &[(&str, &str, &str, &str, &str)] = &[
-    ("aggr", "Aggression (bet/raise when possible)", "1=1", "chosen_kind IN ('bet','raise','allin')", "p_aggr"),
+    ("aggr", "Aggression postflop (bet/raise when possible)", "street <> 'preflop'", "chosen_kind IN ('bet','raise','allin')", "p_aggr"),
     ("cbet", "C-bet flop as the preflop raiser", "situation='cbet'", "chosen_kind IN ('bet','raise','allin')", "p_aggr"),
     ("barrel", "Bet turn again after c-betting", "situation='barrel'", "chosen_kind IN ('bet','raise','allin')", "p_aggr"),
     ("river_barrel", "Bet river after betting the turn", "situation='river_barrel'", "chosen_kind IN ('bet','raise','allin')", "p_aggr"),
@@ -146,6 +146,11 @@ const STATS: &[(&str, &str, &str, &str, &str)] = &[
     ("fold_river", "Fold to a river bet", "situation='river_vs_bet'", "chosen_kind='fold'", "p_fold"),
     ("fold_raise", "Fold to a raise", "situation='facing_raise'", "chosen_kind='fold'", "p_fold"),
     ("call_bets", "Call when facing a bet", "situation IN ('vs_cbet','vs_bet','river_vs_bet')", "chosen_kind='call'", "p_call"),
+    ("pf_limp", "Limp first in (preflop)", "situation='pf_first_in'", "chosen_kind='limp'", "0.0"),
+    ("pf_open", "Raise first in (preflop)", "situation='pf_first_in'", "chosen_kind IN ('raise','allin')", "p_aggr"),
+    ("pf_3bet", "3-bet vs an open (preflop)", "situation='pf_vs_open'", "chosen_kind IN ('raise','allin')", "p_aggr"),
+    ("pf_fold_open", "Fold vs an open (preflop)", "situation='pf_vs_open'", "chosen_kind='fold'", "p_fold"),
+    ("pf_fold_3bet", "Fold to a 3-bet (preflop)", "situation='pf_vs_3bet'", "chosen_kind='fold'", "p_fold"),
 ];
 
 const PRIOR: f64 = 20.0;
@@ -191,8 +196,20 @@ impl Db {
                 conn.execute_batch(&format!("ALTER TABLE attempt ADD COLUMN {c} {t};"))?;
             }
         }
-        conn.execute_batch("CREATE INDEX IF NOT EXISTS attempt_ts ON attempt(ts);")?;
+        conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS attempt_ts ON attempt(ts);
+             CREATE INDEX IF NOT EXISTS attempt_spot ON attempt(spot_id);
+             CREATE TABLE IF NOT EXISTS import_hand (
+                hand_id TEXT PRIMARY KEY, file TEXT, hand_no INTEGER, played TEXT, hero TEXT, hero_cards TEXT, board TEXT,
+                players INTEGER, hero_pos TEXT, villain TEXT, pot_type TEXT, stack_bb REAL, status TEXT, note TEXT,
+                decisions INTEGER DEFAULT 0, ev_loss REAL DEFAULT 0, net_bb REAL, imported_at INTEGER, job TEXT);
+             CREATE TABLE IF NOT EXISTS alias (name TEXT PRIMARY KEY, display TEXT NOT NULL);",
+        )?;
         Ok(Db { conn })
+    }
+
+    pub fn conn(&self) -> &Connection {
+        &self.conn
     }
 
     pub fn record(&self, v: &DrillView, f: &Feedback, ctx: &Context) -> Result<i64> {

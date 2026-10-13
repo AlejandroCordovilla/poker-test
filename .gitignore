@@ -18,3 +18,4 @@ app/src-tauri/gen/
 
 # private notes, player data and REA notes: never published
 /private/
+/data/.fetched/

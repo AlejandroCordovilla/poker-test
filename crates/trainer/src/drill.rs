@@ -458,6 +458,33 @@ impl Engine {
         self.current.as_ref().map(|c| &c.view)
     }
 
+    /// The stored game positioned at `history`, plus a view for whoever acts there.
+    pub fn game_at(&mut self, spot: &SpotInfo, history: &[usize]) -> Result<(&mut PostFlopGame, DrillView)> {
+        self.load(spot)?;
+        let game = &mut self.cache.last_mut().unwrap().1;
+        game.apply_history(history);
+        game.cache_normalized_weights();
+        let hero = game.current_player();
+        let (a, b) = game.private_cards(hero)[0];
+        let mut cur = Current {
+            spot: spot.clone(),
+            mode: Mode::Spot,
+            river: None,
+            hero,
+            hero_cards: (a, b),
+            villain_cards: None,
+            start_len: game.current_board().len(),
+            line: vec![],
+            events: vec![],
+            view: placeholder_view(),
+            chosen: None,
+            decision: 1,
+            stored_history: history.to_vec(),
+        };
+        cur.view = make_view(game, &cur, false);
+        Ok((game, cur.view))
+    }
+
     /// (history JSON, hero cards) of the current decision, for logging and re-drilling.
     /// River decisions (solved live) can't be re-drilled from the stored game.
     pub fn current_context(&self) -> Option<(Option<String>, String)> {
@@ -527,38 +554,9 @@ impl Engine {
             if cur.chosen.is_some() {
                 bail!("already answered");
             }
-            let hero = cur.hero;
-            let n_actions = game.available_actions().len();
-            if chosen >= n_actions {
-                bail!("invalid action");
-            }
-            let h = hand_index(game, hero, cur.hero_cards).ok_or_else(|| anyhow!("hand not in range"))?;
-            let nh = game.private_cards(hero).len();
-            let strat = game.strategy();
-            let evd = game.expected_values_detail(hero);
-            let weights = game.normalized_weights(hero).to_vec();
-            let villain_w = game.normalized_weights(1 - hero).to_vec();
-            let villain_cards = game.private_cards(1 - hero).to_vec();
-            let board = game.current_board();
-            let range = scoring::range_freqs(&strat, &weights, n_actions);
-            let ev_bb: Vec<f64> = (0..n_actions).map(|a| evd[a * nh + h] as f64 / BB).collect();
-            let freq: Vec<f64> = (0..n_actions).map(|a| strat[a * nh + h] as f64).collect();
-            let score = scoring::score(&ev_bb, &freq, chosen, cur.view.pot_bb, rng_roll);
-            let (c1, c2) = cur.hero_cards;
-            let equity = mc_equity([c1, c2], &board, &villain_cards, &villain_w, 4000, rng);
-            let hand_desc = describe([c1, c2], &board);
-            let actions: Vec<ActionResult> = (0..n_actions)
-                .map(|a| ActionResult {
-                    label: cur.view.actions[a].label.clone(),
-                    kind: cur.view.actions[a].kind.clone(),
-                    ev_bb: ev_bb[a],
-                    freq_hand: freq[a],
-                    freq_range: range[a],
-                })
-                .collect();
-            let reason = reason::explain(&cur.view, &actions, &score, chosen, &hand_desc, equity, &cur.spot);
+            let fb = grade(game, cur, chosen, rng_roll, rng)?;
             cur.chosen = Some(chosen);
-            Ok(Feedback { chosen, verdict: score.verdict.label().into(), score, actions, hand_desc, equity, reason, continues: cur.mode != Mode::Spot })
+            Ok(fb)
         })
     }
 
@@ -630,6 +628,77 @@ fn replay_line(game: &mut PostFlopGame, cur: &Current) -> Vec<String> {
     }
     game.cache_normalized_weights();
     out
+}
+
+/// Grades `chosen` at the current node for the hero in `cur`.
+fn grade(game: &mut PostFlopGame, cur: &Current, chosen: usize, rng_roll: Option<u32>, rng: &mut Rng) -> Result<Feedback> {
+    let hero = cur.hero;
+    let n_actions = game.available_actions().len();
+    if chosen >= n_actions {
+        bail!("invalid action");
+    }
+    let h = hand_index(game, hero, cur.hero_cards).ok_or_else(|| anyhow!("hand not in range"))?;
+    let nh = game.private_cards(hero).len();
+    let strat = game.strategy();
+    let evd = game.expected_values_detail(hero);
+    let weights = game.normalized_weights(hero).to_vec();
+    let villain_w = game.normalized_weights(1 - hero).to_vec();
+    let villain_cards = game.private_cards(1 - hero).to_vec();
+    let board = game.current_board();
+    let range = scoring::range_freqs(&strat, &weights, n_actions);
+    let ev_bb: Vec<f64> = (0..n_actions).map(|a| evd[a * nh + h] as f64 / BB).collect();
+    let freq: Vec<f64> = (0..n_actions).map(|a| strat[a * nh + h] as f64).collect();
+    let score = scoring::score(&ev_bb, &freq, chosen, cur.view.pot_bb, rng_roll);
+    let (c1, c2) = cur.hero_cards;
+    let equity = mc_equity([c1, c2], &board, &villain_cards, &villain_w, 4000, rng);
+    let hand_desc = describe([c1, c2], &board);
+    let actions: Vec<ActionResult> = (0..n_actions)
+        .map(|a| ActionResult {
+            label: cur.view.actions[a].label.clone(),
+            kind: cur.view.actions[a].kind.clone(),
+            ev_bb: ev_bb[a],
+            freq_hand: freq[a],
+            freq_range: range[a],
+        })
+        .collect();
+    let reason = reason::explain(&cur.view, &actions, &score, chosen, &hand_desc, equity, &cur.spot);
+    Ok(Feedback { chosen, verdict: score.verdict.label().into(), score, actions, hand_desc, equity, reason, continues: cur.mode != Mode::Spot })
+}
+
+/// For imported hands: view + grade of a real decision at the game's current node.
+/// `events`: (board length, player 0=OOP/1=IP, kind char f/x/c/b/r) of every action so far.
+pub(crate) fn grade_real(
+    game: &mut PostFlopGame,
+    spot: &SpotInfo,
+    hero: usize,
+    hero_cards: (Card, Card),
+    line: &[String],
+    events: &[(usize, usize, char)],
+    chosen: usize,
+    rng: &mut Rng,
+) -> Result<(DrillView, Feedback)> {
+    let mut cur = Current {
+        spot: spot.clone(),
+        mode: Mode::Spot,
+        river: None,
+        hero,
+        hero_cards,
+        villain_cards: None,
+        start_len: game.current_board().len(),
+        line: line.to_vec(),
+        events: events.iter().map(|&(board_len, player, kind)| Ev { board_len, player, kind }).collect(),
+        view: placeholder_view(),
+        chosen: None,
+        decision: 1,
+        stored_history: vec![],
+    };
+    cur.view = make_view(game, &cur, false);
+    let fb = grade(game, &cur, chosen, None, rng)?;
+    Ok((cur.view, fb))
+}
+
+pub(crate) fn describe_action_pub(who: &str, a: Action, before: [i32; 2], player: usize) -> String {
+    describe_action(who, a, before, player)
 }
 
 enum Advance {

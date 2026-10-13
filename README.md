@@ -4,8 +4,14 @@ A personal Mac app for 40-50bb no-rake NLHE home games: solver-graded drills plu
 
 ## Status
 
-- Phase 0 (design): done.
-- Milestone 1 (solver pipeline): preflop solver, flop clustering and the batch CLI are built; the full overnight batch hasn't been run yet.
+- Solver pipeline (Milestone 1): 1,140 spots (40/50/100bb; BTN vs BB, SB vs BB, BTN vs SB; single-raised and 3-bet pots; 75 flops, 40 at 100bb), solved locally or on GitHub Actions (`.github/workflows/solve.yml`, fetch with `scripts/fetch-solutions.sh`).
+- App (`app/`, Tauri): open `target/release/bundle/macos/Poker Trainer.app`.
+  - **Drill:** Spot, Street or Full hand (river solved live), RNG mode, filters (stack, matchup, pot, position, street, hand type, board, close decisions), five grades (Best, Correct, Inaccuracy, Wrong, Blunder), EV loss in bb and % of pot, bb/$ toggle.
+  - **Ranges:** paint a full range on the 13x13 grid (preflop scenarios, or a solved flop) and get it graded hand by hand.
+  - **Leaks:** stats vs the solver with shrinkage, 90% ranges, confidence and a 30-decision minimum; top 3 leaks by cost; click a stat for its hands; "Drill this".
+  - **Real hands:** import PokerNow logs; preflop graded instantly against the preflop model, heads-up postflop pots re-solved on the exact flop in the background.
+  - **Progress:** daily trend, costliest spot types.
+- Still to come: spaced repetition and the daily session generator (Milestone 4), opponent node-locking.
 
 ## Setup
 

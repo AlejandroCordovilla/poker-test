@@ -410,6 +410,92 @@ impl Solver {
         }
     }
 
+    /// Counterfactual values under the average strategy (no updates). With `unit`, every
+    /// terminal pays 1, which gives the probability mass the opponents reach with; dividing
+    /// the two gives an EV per hand.
+    fn eval(&self, node: usize, reach: &[f64], unit: bool) -> Vec<f64> {
+        let n = self.cfg.players;
+        let mut out = vec![0.0; n * N];
+        match &self.nodes[node] {
+            Node::T(term) => {
+                let scals: Vec<f64> = (0..n).map(|p| self.scal(&reach[p * N..(p + 1) * N])).collect();
+                match term.kind {
+                    Kind::Fold { winner } => {
+                        let pot: f64 = term.invest.iter().sum();
+                        for p in 0..n {
+                            let net = if unit { 1.0 } else if p == winner { pot - term.invest[p] } else { -term.invest[p] };
+                            let others: f64 = (0..n).filter(|&q| q != p).map(|q| scals[q]).product();
+                            out[p * N..(p + 1) * N].iter_mut().for_each(|x| *x = net * others);
+                        }
+                    }
+                    Kind::Flop { a, b, .. } | Kind::AllIn { a, b } => {
+                        let (ra, rb) = (&reach[a * N..(a + 1) * N], &reach[b * N..(b + 1) * N]);
+                        let mut pab = 0.0;
+                        for i in 0..N {
+                            let (mut va, mut vb, mut ci) = (0.0, 0.0, 0.0);
+                            for j in 0..N {
+                                if unit {
+                                    va += term.cond[i * N + j] * rb[j];
+                                    vb += self.eq.w(i, j) / (hand169::combo_count(i) * 1225.0) * ra[j];
+                                } else {
+                                    va += term.ma[i * N + j] * rb[j];
+                                    vb += term.mb[i * N + j] * ra[j];
+                                }
+                                ci += term.cond[i * N + j] * rb[j];
+                            }
+                            out[a * N + i] = va;
+                            out[b * N + i] = vb;
+                            pab += self.prior[i] * ra[i] * ci;
+                        }
+                        for p in 0..n {
+                            if p == a || p == b {
+                                let others: f64 = (0..n).filter(|&q| q != a && q != b).map(|q| scals[q]).product();
+                                out[p * N..(p + 1) * N].iter_mut().for_each(|x| *x *= others);
+                            } else {
+                                let others: f64 = (0..n).filter(|&q| q != a && q != b && q != p).map(|q| scals[q]).product();
+                                let v = if unit { 1.0 } else { -term.invest[p] } * pab * others;
+                                out[p * N..(p + 1) * N].iter_mut().for_each(|x| *x = v);
+                            }
+                        }
+                    }
+                }
+            }
+            Node::D(d) => {
+                let p = d.player;
+                let avg = self.average(node);
+                for (a, &(_, child)) in d.actions.iter().enumerate() {
+                    let mut r = reach.to_vec();
+                    for h in 0..N {
+                        r[p * N + h] *= avg[a * N + h];
+                    }
+                    let cv = self.eval(child, &r, unit);
+                    for q in 0..n {
+                        for h in 0..N {
+                            out[q * N + h] += if q == p { avg[a * N + h] * cv[q * N + h] } else { cv[q * N + h] };
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// EV (bb, net for the hand from the start) of each action at the decision `path` leads
+    /// to, per hand class, plus the action names and the acting seat.
+    pub fn action_evs(&self, path: &[&str]) -> Result<(usize, Vec<String>, Vec<Vec<f64>>), String> {
+        let (node, reach) = self.walk(path)?;
+        let Node::D(d) = &self.nodes[node] else { return Err("not a decision".into()) };
+        let p = d.player;
+        let flat: Vec<f64> = reach.concat();
+        let mass = self.eval(node, &flat, true);
+        let mut evs = Vec::new();
+        for &(_, child) in &d.actions {
+            let v = self.eval(child, &flat, false);
+            evs.push((0..N).map(|h| { let m = mass[p * N + h]; if m > 1e-12 { v[p * N + h] / m } else { 0.0 } }).collect());
+        }
+        Ok((p, d.actions.iter().map(|a| a.0.clone()).collect(), evs))
+    }
+
     fn average(&self, node: usize) -> Vec<f64> {
         let Node::D(d) = &self.nodes[node] else { panic!("not a decision") };
         let k = d.actions.len();
@@ -594,6 +680,28 @@ impl Solver {
             oop_width: width(oop),
             ip_width: width(ip),
         })
+    }
+}
+
+#[cfg(test)]
+mod ev_tests {
+    use super::*;
+    use poker_core::hand169::index_of;
+
+    #[test]
+    fn preflop_evs_make_sense() {
+        let eq = EquityTable::compute(4000, 3);
+        let mut s = Solver::new(Config::new(3, 40.0), eq);
+        s.solve(1500);
+        let (p, names, evs) = s.action_evs(&[]).unwrap(); // BTN first in
+        assert_eq!(p, 0);
+        let fold = names.iter().position(|n| n == "fold").unwrap();
+        let open = names.iter().position(|n| n == "open").unwrap();
+        let aa = index_of("AA").unwrap();
+        let s72 = index_of("72o").unwrap();
+        assert!(evs[fold][aa].abs() < 1e-6, "folding first in on the button costs nothing: {}", evs[fold][aa]);
+        assert!(evs[open][aa] > 1.0, "AA open EV {}", evs[open][aa]);
+        assert!(evs[open][s72] < evs[fold][s72], "72o should prefer folding");
     }
 }
 

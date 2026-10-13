@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, Feedback, Meta } from "./api";
 import { Drill, Session } from "./Drill";
+import { Import } from "./Import";
 import { Leaks } from "./Leaks";
 import { Progress } from "./Progress";
+import { RangeBuilder } from "./RangeBuilder";
 import { convertText, loadUnits, money, saveUnits, Units } from "./units";
 
-type Tab = "drill" | "leaks" | "progress";
+type Tab = "drill" | "ranges" | "leaks" | "import" | "progress";
 
 export default function App() {
   const [tab, setTab] = useState<Tab>("drill");
@@ -36,9 +38,9 @@ export default function App() {
       <header className="top">
         <div className="brand">♠ Poker Trainer</div>
         <nav>
-          {(["drill", "leaks", "progress"] as Tab[]).map((x) => (
+          {(["drill", "ranges", "leaks", "import", "progress"] as Tab[]).map((x) => (
             <button key={x} className={tab === x ? "on" : ""} onClick={() => setTab(x)}>
-              {x === "drill" ? "Drill" : x === "leaks" ? "Leaks" : "Progress"}
+              {x === "drill" ? "Drill" : x === "ranges" ? "Ranges" : x === "leaks" ? "Leaks" : x === "import" ? "Real hands" : "Progress"}
             </button>
           ))}
         </nav>
@@ -69,6 +71,8 @@ export default function App() {
         <Drill meta={meta} m={m} t={t} redrill={redrill} onRedrillDone={() => setRedrill(null)} onAnswered={onAnswered} />
       </div>
       {tab === "leaks" && <Leaks m={m} t={t} onDrill={(id) => { setRedrill(id); setTab("drill"); }} />}
+      {tab === "ranges" && <RangeBuilder m={m} />}
+      {tab === "import" && <Import m={m} t={t} />}
       {tab === "progress" && <Progress m={m} />}
     </div>
   );

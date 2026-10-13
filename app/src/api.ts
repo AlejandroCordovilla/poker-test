@@ -89,3 +89,27 @@ export const api = {
   attempts: (stat: string | null, source: string | null, opponent: string | null) => invoke<AttemptRow[]>("attempts", { stat, source, opponent }),
   redrill: (id: number) => invoke<DrillView>("redrill", { id }),
 };
+
+export type Preview = { hands: number; with_cards: number; players: [string, number][]; hero: string | null; aliases: Record<string, string>; already: number };
+export type ImportResult = { imported: number; skipped_existing: number; preflop_decisions: number; postflop_queued: number };
+export type ImportProgress = { queued: number; done: number; failed: number; current: string | null; last_seconds: number };
+export type HandRow = {
+  hand_id: string; hand_no: number; played: string; hero_cards: string; board: string; hero_pos: string; villain: string;
+  pot_type: string; status: string; note: string; decisions: number; ev_loss: number; net_bb: number;
+};
+export type DecisionRow = { street: string; situation: string; board: string; chosen: string; best: string; ev_loss_bb: number; ev_loss_pct: number; verdict: string };
+
+export const importApi = {
+  preview: (text: string) => invoke<Preview>("import_preview", { text }),
+  run: (text: string, file: string, hero: string, aliases: Record<string, string>) => invoke<ImportResult>("import_run", { text, file, hero, aliases }),
+  status: () => invoke<ImportProgress>("import_status"),
+  hands: () => invoke<HandRow[]>("import_hands"),
+  detail: (handId: string) => invoke<DecisionRow[]>("import_hand_detail", { handId }),
+};
+
+export type ClassInfo = { class: number; name: string; weight: number; freq: number[]; ev: number[] };
+export type RangeTask = { title: string; description: string; actions: string[]; kinds: string[]; pot_bb: number; board: string[]; classes: ClassInfo[] };
+export const rangeApi = {
+  task: (args: { kind: "preflop" | "flop"; table?: number; stack: number; scenario?: string; matchup?: string; potType?: string; who?: string }) =>
+    invoke<RangeTask>("range_task", args),
+};
