@@ -269,3 +269,6 @@ table.inner { margin-top: 4px; }
 .l-pain { color: var(--wrong); }
 .l-analogy { font-style: italic; }
 .l-rule { background: var(--accent-soft); color: var(--ink); padding: 8px 12px; border-radius: 8px; border-left: 3px solid var(--accent); }
+.l-why { font: 14px -apple-system, BlinkMacSystemFont, sans-serif; color: var(--muted); margin-left: 6px; }
+button.link { background: none; border: 0; padding: 0; color: var(--accent); font-size: 13px; cursor: pointer; }
+button.link:hover { text-decoration: underline; }

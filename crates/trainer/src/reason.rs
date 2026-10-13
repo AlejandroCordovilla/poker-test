@@ -111,6 +111,9 @@ pub struct Lesson {
     pub proof: String,
     /// a one-line rule to apply next time (the "rebuild it" step)
     pub rule: String,
+    /// the reason in a few words, with the key numbers (shown by default)
+    #[serde(default)]
+    pub why: String,
 }
 
 fn bb(x: f64) -> String {
@@ -137,12 +140,13 @@ pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, ha
     let right = chosen == s.target || loss <= 0.01;
 
     // 1) say the thing
+    let short = |l: &str| l.split(" (").next().unwrap_or(l).to_string();
     let verdict = if right {
-        format!("{} is right here with {hand_txt}.", target.label)
+        format!("{} is right.", short(&target.label))
     } else if s.mixed && !s.rare {
-        format!("Close: the solver prefers {} but also plays {} with {hand_txt}.", target.label, acts[chosen].label)
+        format!("Close. {} is a bit better than {}.", short(&target.label), short(&acts[chosen].label))
     } else {
-        format!("{} beats {} here with {hand_txt}.", target.label, acts[chosen].label)
+        format!("{}, not {}.", short(&target.label), short(&acts[chosen].label))
     };
 
     // 2) core idea + analogy + rule, by the type of decision the solver chose
@@ -154,7 +158,7 @@ pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, ha
                 bb(v.to_call_bb), bb(v.pot_bb + v.to_call_bb), pct(need)
             ),
             "It's a bet at the betting window: if the payout is 3-to-1, your horse has to win more than 1 race in 4 or you're donating.".to_string(),
-            "Facing a bet: price = call ÷ (pot after you call). Continue only if your equity beats the price.".to_string(),
+            "Facing a bet: continue when your equity beats the price.".to_string(),
         ),
         ("raise" | "allin", true) => (
             if hand.bucket >= Bucket::Strong { "Raise for value" } else { "Fold equity" }.to_string(),
@@ -164,26 +168,26 @@ pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, ha
                 "A raise wins two ways: they fold right now, or you hit and win a bigger pot. A hand with outs makes the best raise because it isn't dead when called.".to_string()
             },
             if hand.bucket >= Bucket::Strong { "If someone's already buying, you raise the price while they still want it.".to_string() } else { "It's a fake-out with a backup plan: if the bluff gets called, you still have outs.".to_string() },
-            "Raise with the top of your range and with your best draws; call with the middle.".to_string(),
+            "Raise your best hands and best draws; call the middle.".to_string(),
         ),
         ("check", false) => match hand.bucket {
             Bucket::Nuts | Bucket::Strong => (
                 "Protect your checks".to_string(),
                 "If you only check weak hands, an aggressive player bets every time you check. Keeping some strong hands in your checks makes that auto-bet lose money.".to_string(),
                 "A shop that sometimes leaves the door unlocked with a guard dog inside: burglars stop trying every door.".to_string(),
-                "Check some strong hands too, so 'check' never means 'I give up'.".to_string(),
+                "Check some strong hands too.".to_string(),
             ),
             Bucket::Medium | Bucket::Weak => (
                 "Pot control".to_string(),
                 format!("{hand_txt} beats bluffs but loses to value. Betting mostly gets called by better and folds out worse, so you're betting into the wrong half of their range."),
                 "Don't start a fight you can only win against people who'd have walked away anyway.".to_string(),
-                "Medium hands want a cheap showdown: check, and decide on their bet.".to_string(),
+                "Medium hands: check and decide on their bet.".to_string(),
             ),
             _ => (
                 "Pick good bluffs".to_string(),
                 format!("With {} equity and no draw, betting needs folds right now and has no backup plan. Better bluffs are hands that can still improve.", pct(equity)),
                 "A bluff with outs is a fake-out with a parachute. Pure air is jumping without one.".to_string(),
-                "Bluff with draws and overcards; give up with pure air on bad boards.".to_string(),
+                "Bluff with draws, not pure air.".to_string(),
             ),
         },
         _ => {
@@ -193,28 +197,28 @@ pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, ha
                     "Polarization".to_string(),
                     "Big bets are for the two ends of your range: very strong hands that want to get paid, and draws or bluffs that want folds. Medium hands bet small or check.".to_string(),
                     "A big bet is shouting. You only shout when you either have the goods or you really need them to back off.".to_string(),
-                    "Bet big with the nuts and your best draws; bet small or check with the middle.".to_string(),
+                    "Big bets: nuts and draws. Middle hands: small or check.".to_string(),
                 )
             } else if aggressor && v.street == "flop" {
                 (
                     "Range advantage".to_string(),
                     format!("As the preflop raiser on a {} board, you have more strong hands than they do. A small bet makes money with almost your whole range because they have to fold a lot of hands.", v.texture),
                     "Like a landlord collecting small rent from every tenant: a little from many beats a lot from a few.".to_string(),
-                    "As the preflop raiser on boards that favor you, bet small and often.".to_string(),
+                    "Raiser on a good board: bet small, often.".to_string(),
                 )
             } else if hand.bucket >= Bucket::Medium {
                 (
                     "Value".to_string(),
                     format!("{hand_txt} is ahead of the hands that will call. A bet gets paid by worse; checking lets them see a free card."),
                     "You're selling something: price it so the buyers who are worse off still buy.".to_string(),
-                    "Bet when worse hands call. Size up when they'll still call bigger.".to_string(),
+                    "Bet when worse hands call.".to_string(),
                 )
             } else {
                 (
                     "Fold equity".to_string(),
                     format!("{hand_txt} rarely wins at showdown, so the bet's job is to win the pot now, and your draw is the backup when they call."),
                     "A fake-out with a backup plan.".to_string(),
-                    "Semi-bluff with draws; they win now or win later.".to_string(),
+                    "Semi-bluff with draws.".to_string(),
                 )
             }
         }
@@ -230,7 +234,7 @@ pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, ha
             ("check", false) => "Checking gives up value (or a profitable bluff) the solver takes here.".to_string(),
             _ => format!("{} puts chips in where the solver doesn't want them.", acts[chosen].label),
         };
-        format!("{what} That costs about {} each time ({:.1}% of the pot), so {} over 100 times.", bb(loss), s.ev_loss_pct, bb(loss * 100.0))
+        format!("{what} About {} each time.", bb(loss))
     };
 
     // 4) proof: the numbers
@@ -243,5 +247,16 @@ pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, ha
     if s.mixed {
         proof.push_str(". The solver mixes here, so being on the right side of the mix matters less than mixing at all.");
     }
-    Lesson { verdict, pain, concept, idea, analogy, proof, rule }
+    let why = match concept.as_str() {
+        "Pot odds" => format!("You need {} equity and have about {}.", pct(need), pct(equity)),
+        "Raise for value" => "You're ahead of most hands that bet here.".to_string(),
+        "Protect your checks" => "Checking some strong hands stops them from betting every time you check.".to_string(),
+        "Pot control" => "Betting mostly gets called by better hands.".to_string(),
+        "Pick good bluffs" => format!("{} equity and no draw: no backup plan if called.", pct(equity)),
+        "Polarization" => "Big bets are for very strong hands and draws.".to_string(),
+        "Range advantage" => "Your range is stronger on this board, so small bets work with most hands.".to_string(),
+        "Value" => "Worse hands will call.".to_string(),
+        _ => "It wins now, or later with your outs.".to_string(),
+    };
+    Lesson { verdict, pain, concept, idea, analogy, proof, rule, why }
 }

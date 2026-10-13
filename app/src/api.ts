@@ -45,7 +45,7 @@ export type DrillView = {
 };
 
 export type SeatView = { pos: string; who: string; dealer: boolean; in_hand: boolean; stack_bb: number; preflop: string; action: string; action_kind: string };
-export type Lesson = { verdict: string; pain: string; concept: string; idea: string; analogy: string; proof: string; rule: string };
+export type Lesson = { verdict: string; pain: string; concept: string; idea: string; analogy: string; proof: string; rule: string; why: string };
 export type ReviewItem = { index: number; view: DrillView; feedback: Feedback | null };
 
 export type ActionResult = { label: string; kind: string; ev_bb: number; freq_hand: number; freq_range: number };
