@@ -104,7 +104,17 @@ export type ImportResult = { imported: number; skipped_existing: number; preflop
 export type ImportProgress = { queued: number; done: number; failed: number; current: string | null; last_seconds: number };
 export type HandRow = {
   hand_id: string; hand_no: number; played: string; hero_cards: string; board: string; hero_pos: string; villain: string;
-  pot_type: string; status: string; note: string; decisions: number; ev_loss: number; net_bb: number;
+  pot_type: string; status: string; note: string; decisions: number; ev_loss: number; net_bb: number; opps: string;
+};
+export type ReplayAct = { street: number; player: string; kind: "Fold" | "Check" | "Call" | "Bet" | "Raise"; amount: number; all_in: boolean; index: number };
+export type Replay = {
+  hand: {
+    id: string; no: number; played: string; dealer: string; seats: [number, string, number][]; bb_size: number; acts: ReplayAct[];
+    board: number[]; collected: [string, number][]; returned: [string, number][]; shows: [string, string[]][];
+  };
+  hero: string; positions: [string, string][]; names: Record<string, string>;
+  decisions: { act_index: number; feedback: Feedback }[];
+  board: string[]; hero_cards: string[];
 };
 export type DecisionRow = { street: string; situation: string; board: string; chosen: string; best: string; ev_loss_bb: number; ev_loss_pct: number; verdict: string };
 
@@ -114,6 +124,7 @@ export const importApi = {
   status: () => invoke<ImportProgress>("import_status"),
   hands: () => invoke<HandRow[]>("import_hands"),
   detail: (handId: string) => invoke<DecisionRow[]>("import_hand_detail", { handId }),
+  replay: (handId: string) => invoke<Replay>("import_replay", { handId }),
 };
 
 export type ClassInfo = { class: number; name: string; weight: number; freq: number[]; ev: number[] };

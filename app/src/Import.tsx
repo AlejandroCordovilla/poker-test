@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { DecisionRow, HandRow, ImportProgress, importApi, Preview } from "./api";
+import { Replayer } from "./Replayer";
 import { prettyCards } from "./units";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -23,6 +24,7 @@ export function Import({ m, t }: { m: (x: number, d?: number) => string; t: (s: 
   const [sort, setSort] = useState<"loss" | "date">("loss");
   const [open, setOpen] = useState<string | null>(null);
   const [detail, setDetail] = useState<DecisionRow[]>([]);
+  const [replay, setReplay] = useState<string | null>(null);
 
   const refresh = () => importApi.hands().then(setHands).catch((e) => setError(String(e)));
   useEffect(() => { refresh(); }, []);
@@ -79,6 +81,7 @@ export function Import({ m, t }: { m: (x: number, d?: number) => string; t: (s: 
 
   return (
     <main className="main import">
+      {replay && <Replayer handId={replay} onClose={() => setReplay(null)} m={m} t={t} />}
       {error && <div className="error">{error}</div>}
       <div className="import-head">
         <label className="primary file-btn">
@@ -154,6 +157,7 @@ export function Import({ m, t }: { m: (x: number, d?: number) => string; t: (s: 
                   {open === h.hand_id && (
                     <tr className="detail-row">
                       <td colSpan={9}>
+                        <button className="primary" onClick={() => setReplay(h.hand_id)}>▶ Replay this hand</button>
                         {h.note && <div className="hint">{h.note}</div>}
                         {detail.length === 0 ? <div className="hint">No graded decisions in this hand.</div> : (
                           <table className="cats inner">

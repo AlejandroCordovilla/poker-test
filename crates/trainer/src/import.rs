@@ -891,6 +891,9 @@ pub struct Replay {
     pub positions: Vec<(String, String)>,
     pub names: HashMap<String, String>,
     pub decisions: Vec<ReplayDecision>,
+    /// the same cards as text ("Ah") for the UI
+    pub board: Vec<String>,
+    pub hero_cards: Vec<String>,
 }
 
 pub fn replay(db: &Db, hand_id: &str) -> Result<Replay> {
@@ -902,7 +905,9 @@ pub fn replay(db: &Db, hand_id: &str) -> Result<Replay> {
         .filter_map(|x| x.ok())
         .filter_map(|(i, f)| serde_json::from_str(&f).ok().map(|feedback| ReplayDecision { act_index: i as usize, feedback }))
         .collect();
-    Ok(Replay { positions: positions(&hand).unwrap_or_default(), names: aliases(db)?, hand, hero, decisions })
+    let board = hand.board.iter().map(|&c| card_to_string(c)).collect();
+    let hero_cards = hand.hero_cards.map(|(a, b)| vec![card_to_string(a), card_to_string(b)]).unwrap_or_default();
+    Ok(Replay { positions: positions(&hand).unwrap_or_default(), names: aliases(db)?, hand, hero, decisions, board, hero_cards })
 }
 
 pub fn aliases(db: &Db) -> Result<HashMap<String, String>> {

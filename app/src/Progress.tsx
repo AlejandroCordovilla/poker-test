@@ -1,15 +1,22 @@
 import { useEffect, useState } from "react";
-import { api, Summary } from "./api";
+import { api, HandRow, importApi, Summary } from "./api";
+import { Results } from "./Results";
 
 export function Progress({ m }: { m: (x: number, d?: number) => string }) {
   const [s, setS] = useState<Summary | null>(null);
+  const [hands, setHands] = useState<HandRow[]>([]);
   const [error, setError] = useState<string | null>(null);
-  useEffect(() => { api.summary().then(setS).catch((e) => setError(String(e))); }, []);
+  useEffect(() => {
+    api.summary().then(setS).catch((e) => setError(String(e)));
+    importApi.hands().then(setHands).catch(() => {});
+  }, []);
   if (error) return <main className="main"><div className="error">{error}</div></main>;
   if (!s) return <main className="main" />;
   const maxLoss = Math.max(0.01, ...s.by_day.map((d) => d.avg_loss_bb));
   return (
     <main className="main progress">
+      <Results hands={hands} m={m} />
+      <h3>Drills</h3>
       <div className="stats">
         <div><div className="v">{s.attempts}</div><div className="l">decisions graded</div></div>
         <div><div className="v">{m(s.avg_loss_bb, 2)}</div><div className="l">average EV loss ({s.avg_loss_pct.toFixed(1)}% of pot)</div></div>
