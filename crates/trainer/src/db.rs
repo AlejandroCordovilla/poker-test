@@ -83,6 +83,10 @@ const COLUMNS: &[(&str, &str)] = &[
     ("opponent", "TEXT"),
     ("history", "TEXT"),
     ("hero_cards", "TEXT"),
+    ("has_big", "INTEGER"),
+    ("chosen_big", "INTEGER"),
+    ("p_big", "REAL"),
+    ("faced_big", "INTEGER"),
 ];
 
 /// One leak statistic: how often the player takes an action in a situation, against how
@@ -146,6 +150,9 @@ const STATS: &[(&str, &str, &str, &str, &str)] = &[
     ("fold_river", "Fold to a river bet", "situation='river_vs_bet'", "chosen_kind='fold'", "p_fold"),
     ("fold_raise", "Fold to a raise", "situation='facing_raise'", "chosen_kind='fold'", "p_fold"),
     ("call_bets", "Call when facing a bet", "situation IN ('vs_cbet','vs_bet','river_vs_bet')", "chosen_kind='call'", "p_call"),
+    ("big_bet", "Bet big (75%+ pot) when it's an option", "has_big=1", "chosen_big=1", "p_big"),
+    ("fold_big", "Fold to a big bet (75%+ pot)", "faced_big=1", "chosen_kind='fold'", "p_fold"),
+    ("call_big", "Call a big bet (75%+ pot)", "faced_big=1", "chosen_kind='call'", "p_call"),
     ("pf_limp", "Limp first in (preflop)", "situation='pf_first_in'", "chosen_kind='limp'", "0.0"),
     ("pf_open", "Raise first in (preflop)", "situation='pf_first_in'", "chosen_kind IN ('raise','allin')", "p_aggr"),
     ("pf_3bet", "3-bet vs an open (preflop)", "situation='pf_vs_open'", "chosen_kind IN ('raise','allin')", "p_aggr"),
@@ -217,18 +224,26 @@ impl Db {
         let chosen = &v.actions[f.chosen];
         let best = &v.actions[f.score.target];
         let p = |kinds: &[&str]| -> f64 { f.actions.iter().filter(|a| kinds.contains(&a.kind.as_str())).map(|a| a.freq_hand).sum() };
+        // big = a bet/raise adding 75%+ of the pot (the pot before the hero acts)
+        let pot_before = (v.pot_bb).max(0.01);
+        let big = |a: &crate::drill::ActionView| matches!(a.kind.as_str(), "bet" | "raise" | "allin") && (a.amount_bb - v.to_call_bb).max(0.0) >= crate::drill::BIG * (pot_before + v.to_call_bb) * 0.999 || a.kind == "allin";
+        let has_big = v.street != "preflop" && v.to_call_bb == 0.0 && v.actions.iter().any(&big);
+        let chosen_big = has_big && big(chosen);
+        let p_big: f64 = v.actions.iter().zip(&f.actions).filter(|(a, _)| big(a)).map(|(_, r)| r.freq_hand).sum();
+        let faced_big = v.street != "preflop" && v.to_call_bb > 0.0 && v.to_call_bb >= crate::drill::BIG * (v.pot_bb - v.to_call_bb) * 0.999;
         self.conn.execute(
             "INSERT INTO attempt (ts, source, spot_id, stack, matchup, pot_type, street, texture, hero, in_position, aggressor, node_type, situation,
                 hand, hand_bucket, board, chosen, chosen_kind, best, best_kind, pot_bb, ev_loss_bb, ev_loss_pct, freq_chosen, freq_diff, rare, verdict,
-                p_fold, p_check, p_call, p_aggr, rng, mode, opponent, history, hero_cards)
+                p_fold, p_check, p_call, p_aggr, rng, mode, opponent, history, hero_cards, has_big, chosen_big, p_big, faced_big)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)",
+                ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40)",
             params![
                 now, ctx.source, v.spot_id, v.stack, v.matchup, v.pot_type, v.street, v.texture, v.hero, v.hero_in_position as i64,
                 v.hero_is_aggressor as i64, v.node_type, v.situation, v.hand.join(""), format!("{:?}", f.hand_desc.bucket), v.board.join(""),
                 chosen.label, chosen.kind, best.label, best.kind, v.pot_bb, f.score.ev_loss_bb, f.score.ev_loss_pct, f.actions[f.chosen].freq_hand,
                 f.score.freq_diff, f.score.rare as i64, f.verdict, p(&["fold"]), p(&["check"]), p(&["call"]), p(&["bet", "raise", "allin"]),
-                f.score.rng, format!("{:?}", v.mode).to_lowercase(), ctx.opponent, ctx.history, ctx.hero_cards
+                f.score.rng, format!("{:?}", v.mode).to_lowercase(), ctx.opponent, ctx.history, ctx.hero_cards,
+                has_big as i64, chosen_big as i64, if has_big { Some(p_big) } else { None }, faced_big as i64
             ],
         )?;
         Ok(self.conn.last_insert_rowid())

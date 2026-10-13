@@ -45,6 +45,20 @@ pub struct Filters {
     /// "IP", "OOP"
     #[serde(default)]
     pub positions: Vec<String>,
+    /// "" (any), "facing" (respond to a 75%+ bet), "making" (spots where a 75%+ bet is an option)
+    #[serde(default)]
+    pub big_bets: String,
+}
+
+/// A bet of at least this fraction of the pot counts as "big".
+pub const BIG: f64 = 0.74;
+
+fn is_big(a: Action, pot_chips: i32, tb: [i32; 2], p: usize) -> bool {
+    match a {
+        // raise/all-in amounts are street totals: compare the extra chips to the pot
+        Action::Bet(x) | Action::Raise(x) | Action::AllIn(x) => (x - tb[p].min(x)).max(0) as f64 >= BIG * pot_chips as f64 || matches!(a, Action::AllIn(_)),
+        _ => false,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -311,6 +325,7 @@ impl Engine {
         game.cache_normalized_weights();
         let mut line = Vec::new();
         let mut events = Vec::new();
+        let mut big_last = false;
         loop {
             if game.is_terminal_node() {
                 return Ok(None);
@@ -329,16 +344,47 @@ impl Engine {
             }
             let player = game.current_player();
             let actions = game.available_actions();
-            if game.current_board().len() == target && rng.below(100) < 55 {
-                break;
-            }
+            let on_target = game.current_board().len() == target;
+            let tb = game.total_bet_amount();
+            let pot_chips = game.tree_config().starting_pot + tb[0] + tb[1];
             let strat = game.strategy();
             let w = game.normalized_weights(player).to_vec();
             let freqs = scoring::range_freqs(&strat, &w, actions.len());
+            let big_opts: Vec<usize> = (0..actions.len()).filter(|&i| is_big(actions[i], pot_chips, tb, player) && freqs[i] >= 0.01).collect();
+            let facing = tb[1 - player] > tb[player];
+            match f.big_bets.as_str() {
+                "facing" if on_target => {
+                    if facing && events.last().is_some_and(|e: &Ev| e.kind == 'b' || e.kind == 'r') && big_last {
+                        break;
+                    }
+                    if !facing && !big_opts.is_empty() {
+                        // force a big bet so the next player faces it
+                        let a = *big_opts.iter().max_by_key(|&&i| match actions[i] { Action::Bet(x) | Action::Raise(x) | Action::AllIn(x) => x, _ => 0 }).unwrap();
+                        let before = game.total_bet_amount();
+                        events.push(Ev { board_len: game.current_board().len(), player, kind: kind_char(actions[a]) });
+                        line.push(describe_action(&pos_name(spot, player), actions[a], before, player));
+                        game.play(a);
+                        game.cache_normalized_weights();
+                        big_last = true;
+                        continue;
+                    }
+                }
+                "making" if on_target => {
+                    if !facing && !big_opts.is_empty() && rng.below(100) < 70 {
+                        break;
+                    }
+                }
+                _ => {
+                    if on_target && rng.below(100) < 55 {
+                        break;
+                    }
+                }
+            }
             let mut a = sample(&freqs, &mut rng).unwrap_or(0);
             if matches!(actions[a], Action::Fold) {
                 a = (0..actions.len()).filter(|&i| !matches!(actions[i], Action::Fold)).max_by(|&p, &q| freqs[p].partial_cmp(&freqs[q]).unwrap()).unwrap_or(a);
             }
+            big_last = is_big(actions[a], pot_chips, tb, player);
             let before = game.total_bet_amount();
             events.push(Ev { board_len: game.current_board().len(), player, kind: kind_char(actions[a]) });
             line.push(describe_action(&pos_name(spot, player), actions[a], before, player));
@@ -352,9 +398,29 @@ impl Engine {
         if !position_ok(f, hero) {
             return Ok(None);
         }
-        let weights: Vec<f64> = game.normalized_weights(hero).iter().map(|&w| w as f64).collect();
+        let mut weights: Vec<f64> = game.normalized_weights(hero).iter().map(|&w| w as f64).collect();
         let tb = game.total_bet_amount();
         let pot = chips_bb(game.tree_config().starting_pot + tb[0] + tb[1]);
+        if f.big_bets == "making" {
+            let acts = game.available_actions();
+            let pot_chips = game.tree_config().starting_pot + tb[0] + tb[1];
+            let st = game.strategy();
+            let n = weights.len();
+            for (h, w) in weights.iter_mut().enumerate() {
+                let big: f64 = (0..acts.len()).filter(|&a| is_big(acts[a], pot_chips, tb, hero)).map(|a| st[a * n + h] as f64).sum();
+                *w *= 0.4 + big;
+            }
+        }
+        if f.big_bets == "facing" {
+            // favor hands where folding vs continuing is a real decision (mixed or close)
+            let na = game.available_actions().len();
+            let st = game.strategy();
+            let n = weights.len();
+            for (h, w) in weights.iter_mut().enumerate() {
+                let maxf = (0..na).map(|a| st[a * n + h] as f64).fold(0.0, f64::max);
+                *w *= 0.15 + (1.0 - maxf);
+            }
+        }
         let board = game.current_board();
         let nh = weights.len();
         let evd = if f.close_only { game.expected_values_detail(hero) } else { Vec::new() };
@@ -761,13 +827,19 @@ fn position_ok(f: &Filters, hero: usize) -> bool {
 }
 
 /// River subgame from the turn node that just closed: both ranges as they stand, real pot
-/// and stacks, the spot's river bet sizes. One street, so it solves in about a second.
+/// and stacks, the full live river menu (33 / 75 / 100 / 150% / all-in). One street, so it
+/// solves in about a second.
 fn river_game(game: &mut PostFlopGame, cur: &Current, rng: &mut Rng) -> Result<PostFlopGame> {
-    let board = game.current_board();
     let (h, v) = (cur.hero_cards, cur.villain_cards.unwrap());
     let possible = game.possible_cards();
     let cards: Vec<u8> = (0..52u8).filter(|&c| possible >> c & 1 == 1 && ![h.0, h.1, v.0, v.1].contains(&c)).collect();
     let river = cards[rng.below(cards.len() as u64) as usize];
+    river_subgame(game, river)
+}
+
+/// Solves the river after `river` comes, starting from a closed turn node of `game`.
+pub(crate) fn river_subgame(game: &mut PostFlopGame, river: Card) -> Result<PostFlopGame> {
+    let board = game.current_board();
     let range = |p: usize| -> Result<Range> {
         let w = game.normalized_weights(p);
         let max = w.iter().cloned().fold(0.0f32, f32::max).max(1e-12);
@@ -777,7 +849,7 @@ fn river_game(game: &mut PostFlopGame, cur: &Current, rng: &mut Rng) -> Result<P
     let tb = game.total_bet_amount();
     let tc = game.tree_config().clone();
     let card_config = CardConfig { range: [range(0)?, range(1)?], flop: [board[0], board[1], board[2]], turn: board[3], river };
-    let sizes = BetSizeOptions::try_from((cur.spot.river_bet.as_str(), cur.spot.river_raise.as_str())).map_err(|e| anyhow!(e))?;
+    let sizes = BetSizeOptions::try_from((solver_api::RIVER_LIVE_BET, solver_api::RIVER_LIVE_RAISE)).map_err(|e| anyhow!(e))?;
     let tree = TreeConfig {
         initial_state: BoardState::River,
         starting_pot: tc.starting_pot + tb[0] + tb[1],

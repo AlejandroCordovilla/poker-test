@@ -4,6 +4,10 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+/// River sizes for live river solves (drills and imported hands): small, big, pot, overbet.
+pub const RIVER_LIVE_BET: &str = "33%, 75%, 100%, 150%, a";
+pub const RIVER_LIVE_RAISE: &str = "3x, a";
+
 /// Bet sizes per street in postflop-solver notation ("33%, 75%, a"; raises "3x, a").
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct BetSizes {
@@ -28,15 +32,29 @@ impl BetSizes {
         }
     }
 
-    /// Deep single-raised pots (SPR above 10, e.g. 100bb): real 3x raises on flop and turn,
-    /// since an all-in raise there would be 15+ pots.
-    pub fn deep_srp() -> Self {
-        BetSizes { flop_raise: "3x".into(), turn_raise: "3x".into(), ..Self::slim() }
+    /// Tree version 2 (2026-10-12): adds a 125% overbet on the flop and turn (flop overbet
+    /// skipped at 100bb, where it doesn't fit in 16 GB). The river keeps 75% / all-in in the
+    /// stored solves; drills and imported hands re-solve the river live with `RIVER_LIVE_*`.
+    pub fn for_spot(single_raised: bool, spr: f64) -> Self {
+        let over = "33%, 75%, 125%, a".to_string();
+        match (single_raised, spr > 10.0) {
+            (true, true) => BetSizes {
+                flop_bet: "33%, 75%, a".into(),
+                flop_raise: "3x".into(),
+                turn_bet: over,
+                turn_raise: "3x".into(),
+                river_bet: "75%, a".into(),
+                river_raise: "a".into(),
+            },
+            (true, false) => BetSizes { flop_bet: over.clone(), turn_bet: over, ..Self::slim() },
+            (false, _) => BetSizes { flop_bet: over.clone(), turn_bet: over, river_bet: "33%, 75%, a".into(), ..Self::full() },
+        }
     }
 
-    pub fn for_spot(single_raised: bool, spr: f64) -> Self {
+    /// Version 1 sizes (kept for reading older solves).
+    pub fn for_spot_v1(single_raised: bool, spr: f64) -> Self {
         match (single_raised, spr > 10.0) {
-            (true, true) => Self::deep_srp(),
+            (true, true) => BetSizes { flop_raise: "3x".into(), turn_raise: "3x".into(), ..Self::slim() },
             (true, false) => Self::slim(),
             (false, _) => Self::full(),
         }

@@ -65,6 +65,17 @@ pub fn load(data: &Path) -> Vec<SpotInfo> {
             river_raise: j["spot"]["sizes"]["river_raise"].as_str().unwrap_or("a").to_string(),
         });
     }
+    // newer tree versions replace older solves of the same spot
+    let version = |id: &str| id.strip_prefix('v').and_then(|r| r.split('-').next()).and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
+    let base = |id: &str| if version(id) > 1 { id.splitn(2, '-').nth(1).unwrap_or(id).to_string() } else { id.to_string() };
+    let mut best: std::collections::HashMap<String, SpotInfo> = std::collections::HashMap::new();
+    for s in out {
+        let k = base(&s.id);
+        if best.get(&k).is_none_or(|b| version(&b.id) < version(&s.id)) {
+            best.insert(k, s);
+        }
+    }
+    let mut out: Vec<SpotInfo> = best.into_values().collect();
     out.sort_by(|a, b| a.id.cmp(&b.id));
     out
 }

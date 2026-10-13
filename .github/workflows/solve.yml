@@ -8,7 +8,7 @@ on:
     inputs:
       shards:
         description: "number of shards (machines); 20 run at once"
-        default: "60"
+        default: "80"
 
 jobs:
   matrix:
@@ -41,7 +41,7 @@ jobs:
           ./target/release/solve plan
           ./target/release/solve estimate --pilot 0
       - name: Solve shard
-        run: ./target/release/solve shard --index ${{ matrix.shard }} --of ${{ inputs.shards }} --max-minutes 300 --skip-file data/done.txt
+        run: ./target/release/solve shard --index ${{ matrix.shard }} --of ${{ inputs.shards }} --max-minutes 300 --mem-budget 10.5 --skip-file data/done.txt
       - name: Upload solutions
         if: always()
         uses: actions/upload-artifact@v4

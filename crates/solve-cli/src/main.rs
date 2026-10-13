@@ -86,7 +86,14 @@ struct Config {
     equity_samples: u32,
     target_exploitability_pct: f64,
     max_iterations: u32,
+    /// bet-size tree version; ids of version 2+ are prefixed "v2-" so they replace older solves
+    #[serde(default = "one")]
+    tree_version: u32,
     matchup: Vec<Matchup>,
+}
+
+fn one() -> u32 {
+    1
 }
 
 #[derive(Deserialize, Serialize, Clone)]
@@ -212,7 +219,7 @@ fn cmd_plan(cfg: &Config, data: &Path) -> Result<()> {
                 let key = format!("{}v{}-{pt}", m.opener, m.responder);
                 let r = ranges.get(&key).with_context(|| format!("missing {key}; rerun `solve ranges`"))?;
                 for f in &flops {
-                    let id = format!("{stack}bb-{key}-{}", f.rep);
+                    let id = if cfg.tree_version >= 2 { format!("v{}-{stack}bb-{key}-{}", cfg.tree_version, f.rep) } else { format!("{stack}bb-{key}-{}", f.rep) };
                     jobs.push(Job {
                         spot: SpotConfig {
                             id,
@@ -221,7 +228,7 @@ fn cmd_plan(cfg: &Config, data: &Path) -> Result<()> {
                             flop: f.rep.clone(),
                             pot_bb: r.pot_bb,
                             stack_bb: r.stack_bb,
-                            sizes: BetSizes::for_spot(pt == "srp", r.stack_bb / r.pot_bb),
+                            sizes: if cfg.tree_version >= 2 { BetSizes::for_spot(pt == "srp", r.stack_bb / r.pot_bb) } else { BetSizes::for_spot_v1(pt == "srp", r.stack_bb / r.pot_bb) },
                             store_river: false,
                             target_exploitability_pct: cfg.target_exploitability_pct,
                             max_iterations: cfg.max_iterations,
@@ -236,6 +243,21 @@ fn cmd_plan(cfg: &Config, data: &Path) -> Result<()> {
                 }
             }
         }
+    }
+    // keep every tree under 10 GB so it fits a 16 GB machine: the biggest deep trees drop
+    // the turn overbet
+    let mut downgraded = 0;
+    for j in jobs.iter_mut() {
+        if j.stack >= 80 && j.pot_type == "srp" {
+            let g = solver_pfs::build(&j.spot)?;
+            if g.memory_usage().1 as f64 > 10.0 * 1024f64.powi(3) {
+                j.spot.sizes = BetSizes::for_spot_v1(true, j.spot.stack_bb / j.spot.pot_bb);
+                downgraded += 1;
+            }
+        }
+    }
+    if downgraded > 0 {
+        println!("{downgraded} deep spots use the smaller tree to stay under 10 GB");
     }
     write_json(&data.join("plan.json"), &jobs)?;
     println!("{} jobs ({} stacks x {} matchups x {} pot types; {} flops, {} at 80bb+) -> data/plan.json", jobs.len(), cfg.stacks.len(), cfg.matchup.len(), cfg.pot_types.len(), cfg.flops, cfg.deep_flops.unwrap_or(cfg.flops));

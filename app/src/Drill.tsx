@@ -3,7 +3,7 @@ import { api, DrillView, Feedback, Filters, GameMode, HandResult, Meta } from ".
 import { Card } from "./Card";
 
 type Mode = "random" | "focused" | "leaks";
-export const EMPTY: Filters = { stacks: [], matchups: [], pot_types: [], streets: [], textures: [], hand_buckets: [], close_only: false, positions: [] };
+export const EMPTY: Filters = { stacks: [], matchups: [], pot_types: [], streets: [], textures: [], hand_buckets: [], close_only: false, positions: [], big_bets: "" };
 const POT_NAME: Record<string, string> = { srp: "single-raised pot", "3bp": "3-bet pot" };
 const VERDICT_CLASS: Record<string, string> = { Best: "best", Correct: "correct", Inaccuracy: "inacc", Wrong: "wrong", Blunder: "blunder" };
 const GOOD = ["Best", "Correct"];
@@ -165,6 +165,16 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
         </div>
         {mode === "focused" && meta && (
           <div className="filters">
+            {gameMode === "spot" && (
+              <div className="filter">
+                <div className="filter-label">Big bets</div>
+                <div className="chips">
+                  {[["", "Any"], ["facing", "Facing a big bet"], ["making", "When to bet big"]].map(([v, l]) => (
+                    <button key={v} className={`chip ${filters.big_bets === v ? "on" : ""}`} onClick={() => setFilters({ ...filters, big_bets: v })}>{l}</button>
+                  ))}
+                </div>
+              </div>
+            )}
             <Chips label="Stack" options={meta.stacks} value={filters.stacks} onChange={(v) => setFilters({ ...filters, stacks: v })} fmt={(s) => `${s}bb`} />
             <Chips label="Matchup" options={meta.matchups} value={filters.matchups} onChange={(v) => setFilters({ ...filters, matchups: v })} />
             <Chips label="Pot" options={meta.pot_types} value={filters.pot_types} onChange={(v) => setFilters({ ...filters, pot_types: v })} fmt={(p) => (p === "srp" ? "Single-raised" : "3-bet")} />

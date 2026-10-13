@@ -575,8 +575,13 @@ pub fn analyze_postflop(job: &PostJob, max_gb: f64) -> Result<(Vec<Graded>, Stri
                 notes.push("action didn't close the street the way the tree expects".to_string());
                 return Ok((graded, notes.join("; ")));
             }
-            game.play(card as usize);
-            game.cache_normalized_weights();
+            if cur_street == 3 {
+                // river: re-solve live with the full size menu (incl. pot and overbets)
+                game = crate::drill::river_subgame(&mut game, card)?;
+            } else {
+                game.play(card as usize);
+                game.cache_normalized_weights();
+            }
             line.push(format!("{} {}", if cur_street == 2 { "Turn" } else { "River" }, card_to_string(card)));
         }
         if game.is_terminal_node() || game.is_chance_node() {

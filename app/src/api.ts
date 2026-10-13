@@ -9,6 +9,7 @@ export type Filters = {
   hand_buckets: string[];
   close_only: boolean;
   positions: string[];
+  big_bets: string;
 };
 
 export type GameMode = "spot" | "street" | "hand";

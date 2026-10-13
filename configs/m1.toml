@@ -9,6 +9,8 @@ preflop_iterations = 3000
 equity_samples = 20000
 target_exploitability_pct = 0.5
 max_iterations = 1000
+# 2 = flop/turn 125% overbets (2026-10-12); bump to re-solve everything with new sizes
+tree_version = 2
 
 [[matchup]]
 table = 3
