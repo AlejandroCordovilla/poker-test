@@ -112,6 +112,13 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
       const f = await api.answer(i, roll);
       setFb(f);
       onAnswered(f);
+      if (f.continues && drill.actions[i].kind === "fold") {
+        // folding ends the hand: resolve it right away instead of showing "Continue"
+        const step = await api.continueHand();
+        setEvents(step.events);
+        if (step.result) setResult(step.result);
+        return;
+      }
       if (f.continues && !pauseAll && GOOD.includes(f.verdict)) {
         // "pause only after mistakes": keep playing
         setTimeout(() => advanceRef.current?.(), 350);
