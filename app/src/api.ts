@@ -60,7 +60,13 @@ export type Feedback = {
   reason: string;
   lesson: Lesson | null;
   continues: boolean;
+  exploit: ExploitFeedback | null;
 };
+
+export type Profile = { key: string; name: string; blurb: string; bluff: number; value: number; fold: number; call: number };
+export type ExploitFeedback = { profile: string; actions: ActionResult[]; best: number | null; gto_best: number; verdict: string; ev_loss_bb: number; summary: string; tip: string };
+export type OppStats = { name: string; display: string; hands: number; vpip: number; pfr: number; aggression: number; fold_to_bet: number; faced_bets: number; postflop_actions: number };
+export type Profiles = { presets: Profile[]; from_logs: { stats: OppStats; profile: Profile | null }[] };
 
 export type HandResult = { summary: string; villain_hand: string[] | null; board: string[]; pot_bb: number; hero_won: boolean | null };
 export type Step = { events: string[]; next: DrillView | null; result: HandResult | null };
@@ -88,7 +94,8 @@ export type Summary = {
 
 export const api = {
   meta: () => invoke<Meta>("meta"),
-  newDrill: (filters: Filters, mode: string, gameMode: GameMode) => invoke<DrillView>("new_drill", { filters, mode, gameMode }),
+  newDrill: (filters: Filters, mode: string, gameMode: GameMode, profile: Profile | null) => invoke<DrillView>("new_drill", { filters, mode, gameMode, profile }),
+  profiles: () => invoke<Profiles>("profiles"),
   answer: (index: number, rng: number | null) => invoke<Feedback>("answer", { index, rng }),
   continueHand: () => invoke<Step>("continue_hand"),
   review: () => invoke<ReviewItem[]>("review"),

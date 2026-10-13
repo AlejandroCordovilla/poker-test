@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, DrillView, Feedback, Filters, GameMode, HandResult, Meta, ReviewItem } from "./api";
+import { api, DrillView, Feedback, Filters, GameMode, HandResult, Meta, Profile, ReviewItem } from "./api";
+import { ExploitPanel, GTO, OpponentPicker } from "./ExploitView";
 import { LessonView } from "./LessonView";
 import { TableView } from "./TableView";
 import { Card } from "./Card";
@@ -53,6 +54,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
   const [rngOn, setRngOn] = useState<boolean>(() => load("rngOn", false));
   const [pauseAll, setPauseAll] = useState<boolean>(() => load("pauseAll", true));
   const [filters, setFilters] = useState<Filters>(() => ({ ...EMPTY, ...load("filters", {}) }));
+  const [profile, setProfile] = useState<Profile>(() => load("profile", GTO));
   const [drill, setDrill] = useState<DrillView | null>(null);
   const [fb, setFb] = useState<Feedback | null>(null);
   const [roll, setRoll] = useState<number | null>(null);
@@ -68,6 +70,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
   useEffect(() => save("rngOn", rngOn), [rngOn]);
   useEffect(() => save("pauseAll", pauseAll), [pauseAll]);
   useEffect(() => save("filters", filters), [filters]);
+  useEffect(() => save("profile", profile), [profile]);
 
   const show = (v: DrillView) => {
     setDrill(v);
@@ -82,14 +85,14 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
     setEvents([]);
     setResult(null);
     try {
-      show(await api.newDrill(mode === "focused" ? filters : EMPTY, mode, gameMode));
+      show(await api.newDrill(mode === "focused" ? filters : EMPTY, mode, gameMode, profile.key === "gto" ? null : profile));
     } catch (e) {
       setDrill(null);
       setError(String(e));
     }
-  }, [mode, filters, gameMode, rngOn]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [mode, filters, gameMode, rngOn, profile]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  useEffect(() => { if (meta && meta.spots > 0 && redrill === null) next(); }, [meta, mode, gameMode]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (meta && meta.spots > 0 && redrill === null) next(); }, [meta, mode, gameMode, profile]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (redrill === null) return;
@@ -178,6 +181,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
           <label className="toggle"><input type="checkbox" checked={!pauseAll} onChange={(e) => setPauseAll(!e.target.checked)} /> Pause only after mistakes</label>
         )}
         <label className="toggle"><input type="checkbox" checked={rngOn} onChange={(e) => setRngOn(e.target.checked)} /> RNG mode (roll decides the mix)</label>
+        <OpponentPicker value={profile} onChange={setProfile} />
 
         <div className="filter-label" style={{ marginTop: 14 }}>Deal</div>
         <div className="seg">
@@ -225,6 +229,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
                 Preflop: {drill.preflop}. {drill.texture} board.
                 {drill.mode !== "spot" && <> Decision {drill.decision}.</>}
                 {drill.live_solved && <span className="tag">river solved live</span>}
+                {profile.key !== "gto" && <span className="tag opp">villain plays like {profile.name}</span>}
               </div>
             </div>
 
@@ -246,6 +251,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
               <div className="feedback viewing">
                 <div className="viewing-head">Looking back at decision {viewing.index + 1} ({viewing.view.street}): you chose <b>{t(viewing.view.actions[viewing.feedback.chosen].label)}</b></div>
                 <div className={`verdict ${VERDICT_CLASS[viewing.feedback.verdict]}`}><span className="v">{viewing.feedback.verdict}</span><span>{viewing.feedback.score.ev_loss_bb < 0.005 ? "no EV lost" : `lost ${m(viewing.feedback.score.ev_loss_bb, 2)} (${viewing.feedback.score.ev_loss_pct.toFixed(1)}% of pot)`}</span></div>
+                <ExploitPanel fb={viewing.feedback} m={m} t={t} />
                 <LessonView fb={viewing.feedback} t={t} />
                 <div className="row-btns">
                   <button className="primary" onClick={() => replayFrom(viewing.index)}>Replay from here</button>
@@ -301,6 +307,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
                     ))}
                   </tbody>
                 </table>
+                <ExploitPanel fb={fb} m={m} t={t} />
                 <LessonView fb={fb} t={t} />
                 {result && <div className={`result ${result.hero_won === true ? "won" : result.hero_won === false ? "lost" : ""}`}>{t(result.summary)}</div>}
                 {result && timeline.length > 0 && (

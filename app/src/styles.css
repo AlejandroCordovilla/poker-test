@@ -342,3 +342,15 @@ button.link:hover { text-decoration: underline; }
 @media (max-width: 700px) { .rp-table { height: 360px; border-radius: 60px; } .rp-seat { min-width: 92px; padding: 4px 6px; } }
 .won { color: var(--best); }
 .lost { color: var(--blunder); }
+
+/* exploit mode */
+.opp-picker select { width: 100%; }
+.opp-picker .sliders { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; font-size: 13px; }
+.opp-picker .sliders input { width: 100%; }
+.tag.opp { background: #f2c14e; color: #1d2320; }
+.exploit { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel); }
+.exploit.differs { border-color: #f2c14e; box-shadow: 0 0 0 2px color-mix(in srgb, #f2c14e 25%, transparent); }
+.exploit-head { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.exploit-head .tag { background: #f2c14e; color: #1d2320; }
+.exploit table.compare { margin-top: 8px; }
+.exploit .l-rule { margin: 8px 0 0; }

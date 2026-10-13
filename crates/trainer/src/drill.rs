@@ -5,6 +5,7 @@
 //! - Street: every decision of one street (flop or turn), villain auto-plays its own hand.
 //! - Hand: flop to river. River spots are solved on the spot from the stored turn node.
 
+use crate::exploit::{self, Profile};
 use crate::reason;
 use crate::scoring::{self, Score};
 use crate::spots::{self, SpotInfo};
@@ -153,6 +154,23 @@ pub struct Feedback {
     pub lesson: Option<reason::Lesson>,
     /// Street/Hand mode: the hand goes on after this decision (call `continue_hand`)
     pub continues: bool,
+    /// exploit mode: the best play against the villain's profile, next to the GTO answer
+    #[serde(default)]
+    pub exploit: Option<ExploitFeedback>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExploitFeedback {
+    pub profile: String,
+    /// hero EV of each action against the profile and the best-response frequency (empty on the flop)
+    pub actions: Vec<ActionResult>,
+    pub best: Option<usize>,
+    pub gto_best: usize,
+    /// grade of the chosen action against the profile
+    pub verdict: String,
+    pub ev_loss_bb: f64,
+    pub summary: String,
+    pub tip: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,6 +237,16 @@ struct Current {
     dealt: std::collections::HashMap<usize, Card>,
     /// villain choices by (board length, history): replays repeat them on the same line
     villain_moves: std::collections::HashMap<(usize, Vec<usize>), usize>,
+    /// who the villain plays like (GTO by default)
+    profile: Profile,
+    /// the street's exploit solve, reused for every decision on that street
+    exploit: Option<ExploitCache>,
+}
+
+struct ExploitCache {
+    /// stored history at the street's root, and the river card for river solves
+    key: (Vec<usize>, Option<Card>),
+    game: Box<PostFlopGame>,
 }
 
 impl Current {
@@ -242,6 +270,7 @@ pub struct Engine {
     cache: Vec<(String, PostFlopGame)>,
     current: Option<Current>,
     rng: Rng,
+    profile: Profile,
 }
 
 fn pos_name(spot: &SpotInfo, player: usize) -> String {
@@ -313,7 +342,12 @@ fn street_name(len: usize) -> &'static str {
 
 impl Engine {
     pub fn new(data: &Path, seed: u64) -> Self {
-        Engine { data: data.to_path_buf(), spots: spots::load(data), cache: Vec::new(), current: None, rng: Rng::new(seed) }
+        Engine { data: data.to_path_buf(), spots: spots::load(data), cache: Vec::new(), current: None, rng: Rng::new(seed), profile: Profile::default() }
+    }
+
+    /// Who the villain plays like in the next drills.
+    pub fn set_profile(&mut self, p: Profile) {
+        self.profile = p;
     }
 
     pub fn refresh_spots(&mut self) {
@@ -382,6 +416,7 @@ impl Engine {
     /// Spot mode: walk the solver's range-level strategy to a decision, then deal a hand.
     fn build_spot(&mut self, spot: &SpotInfo, target: usize, f: &Filters) -> Result<Option<DrillView>> {
         let mut rng = Rng::new(self.rng.next_u64());
+        let prof = self.profile.clone();
         let game = self.stored();
         game.back_to_root();
         game.cache_normalized_weights();
@@ -526,6 +561,8 @@ impl Engine {
             snapshots: vec![],
             dealt: Default::default(),
             villain_moves: Default::default(),
+            profile: prof,
+            exploit: None,
         };
         cur.view = make_view(game, &cur, false);
         cur.snap(game);
@@ -541,6 +578,7 @@ impl Engine {
         if !position_ok(f, hero) {
             return Ok(None);
         }
+        let prof = self.profile.clone();
         let game = self.stored();
         game.back_to_root();
         game.cache_normalized_weights();
@@ -572,6 +610,8 @@ impl Engine {
             snapshots: vec![],
             dealt: Default::default(),
             villain_moves: Default::default(),
+            profile: prof,
+            exploit: None,
         };
         // auto-play both hands until the hero's first decision on the target street
         let mut out = Vec::new();
@@ -619,6 +659,8 @@ impl Engine {
             snapshots: vec![],
             dealt: Default::default(),
             villain_moves: Default::default(),
+            profile: Default::default(),
+            exploit: None,
         };
         cur.view = make_view(game, &cur, false);
         Ok((game, cur.view))
@@ -658,7 +700,7 @@ impl Engine {
         game.apply_history(&cur.stored_history);
         game.cache_normalized_weights();
         if let Some((card, rh)) = snap.river {
-            let mut rg = river_subgame(game, card)?;
+            let mut rg = river_subgame(game, card, &kept(&cur))?;
             rg.apply_history(&rh);
             rg.cache_normalized_weights();
             cur.river = Some(Box::new(rg));
@@ -704,6 +746,8 @@ impl Engine {
             snapshots: vec![],
             dealt: Default::default(),
             villain_moves: Default::default(),
+            profile: Default::default(),
+            exploit: None,
         };
         cur.line = replay_line(game, &cur);
         cur.view = make_view(game, &cur, false);
@@ -737,17 +781,122 @@ impl Engine {
     }
 
     pub fn answer(&mut self, chosen: usize, rng_roll: Option<u32>) -> Result<Feedback> {
-        self.with_game(|game, cur, rng| {
+        let mut fb = self.with_game(|game, cur, rng| {
             if cur.chosen.is_some() {
                 bail!("already answered");
             }
             let fb = grade(game, cur, chosen, rng_roll, rng)?;
             cur.chosen = Some(chosen);
-            if let Some(sn) = cur.snapshots.last_mut() {
-                sn.feedback = Some(fb.clone());
-            }
             Ok(fb)
-        })
+        })?;
+        if self.current.as_ref().is_some_and(|c| !c.profile.is_gto()) {
+            fb.exploit = match self.exploit_feedback(&fb, rng_roll) {
+                Ok(x) => Some(x),
+                Err(e) => {
+                    eprintln!("[exploit] {e}");
+                    None
+                }
+            };
+        }
+        if let Some(sn) = self.current.as_mut().and_then(|c| c.snapshots.last_mut()) {
+            sn.feedback = Some(fb.clone());
+        }
+        Ok(fb)
+    }
+
+    /// Exploit answer for the current decision: turn and river decisions are re-solved with the
+    /// villain locked to its profile (once per street, then reused); the flop gets a tip.
+    fn exploit_feedback(&mut self, fb: &Feedback, rng_roll: Option<u32>) -> Result<ExploitFeedback> {
+        let mut cur = self.current.take().ok_or_else(|| anyhow!("no drill in progress"))?;
+        let res = self.exploit_for(&mut cur, fb, rng_roll);
+        self.current = Some(cur);
+        res
+    }
+
+    fn exploit_for(&mut self, cur: &mut Current, fb: &Feedback, rng_roll: Option<u32>) -> Result<ExploitFeedback> {
+        let prof = cur.profile.clone();
+        let hero = cur.hero;
+        let villain = 1 - hero;
+        let len = cur.view.board.len();
+        let gto_best = best_index(&fb.actions);
+        let tip = prof.tip(cur.view.to_call_bb > 0.0);
+        if len == 3 {
+            return Ok(ExploitFeedback {
+                profile: prof.name.clone(),
+                actions: vec![],
+                best: None,
+                gto_best,
+                verdict: String::new(),
+                ev_loss_bb: 0.0,
+                summary: "Exploit answers start on the turn: flop re-solves take minutes.".into(),
+                tip,
+            });
+        }
+        self.load(&cur.spot.clone())?;
+        let game = &mut self.cache.last_mut().unwrap().1;
+        // the street's root in the stored game: just after the turn card, or the closed turn
+        let (root, river) = if len == 4 {
+            game.back_to_root();
+            let mut root = Vec::new();
+            for &a in &cur.stored_history {
+                let chance = game.is_chance_node();
+                game.play(a);
+                root.push(a);
+                if chance {
+                    break;
+                }
+            }
+            (root, None)
+        } else {
+            (cur.stored_history.clone(), cur.dealt.get(&4).copied())
+        };
+        let key = (root.clone(), river);
+        if cur.exploit.as_ref().map_or(true, |c| c.key != key) {
+            let t = std::time::Instant::now();
+            let w = exploit::profile_weights(game, &root, villain, &prof);
+            let sizes = river.map(|_| (solver_api::RIVER_LIVE_BET, solver_api::RIVER_LIVE_RAISE));
+            let mut gto = exploit::street_subgame(game, villain, &w, river, sizes, &kept(cur))?;
+            let ex = exploit::lock_and_solve(&mut gto, villain, &prof)?;
+            eprintln!("[exploit] {} {} solved in {:.1}s", prof.key, if river.is_some() { "river" } else { "turn" }, t.elapsed().as_secs_f64());
+            cur.exploit = Some(ExploitCache { key, game: Box::new(ex) });
+        }
+        // where the hero is inside the street
+        let sub: Vec<usize> = match (&cur.river, river) {
+            (Some(rg), Some(_)) => rg.history().to_vec(),
+            _ => cur.stored_history[root.len().min(cur.stored_history.len())..].to_vec(),
+        };
+        let ex = &mut cur.exploit.as_mut().unwrap().game;
+        ex.apply_history(&sub);
+        ex.cache_normalized_weights();
+        if ex.is_terminal_node() || ex.is_chance_node() || ex.current_player() != hero || ex.available_actions().len() != fb.actions.len() {
+            bail!("exploit tree doesn't line up with this decision");
+        }
+        let h = hand_index(ex, hero, cur.hero_cards).ok_or_else(|| anyhow!("hand not in the exploit range"))?;
+        let nh = ex.private_cards(hero).len();
+        let n = fb.actions.len();
+        let evd = ex.expected_values_detail(hero);
+        let strat = ex.strategy();
+        let weights = ex.normalized_weights(hero).to_vec();
+        let range = scoring::range_freqs(&strat, &weights, n);
+        let ev: Vec<f64> = (0..n).map(|a| evd[a * nh + h] as f64 / BB).collect();
+        let freq: Vec<f64> = (0..n).map(|a| strat[a * nh + h] as f64).collect();
+        let score = scoring::score(&ev, &freq, fb.chosen, cur.view.pot_bb, rng_roll);
+        let actions: Vec<ActionResult> = (0..n)
+            .map(|a| ActionResult { label: fb.actions[a].label.clone(), kind: fb.actions[a].kind.clone(), ev_bb: ev[a], freq_hand: freq[a], freq_range: range[a] })
+            .collect();
+        let best = best_index(&actions);
+        let summary = if best == gto_best {
+            format!("Same play vs {}: {}.", prof.name, actions[best].label)
+        } else {
+            format!(
+                "Vs {}: {} instead of {} (+{:.2}bb).",
+                prof.name,
+                actions[best].label,
+                actions[gto_best].label,
+                (ev[best] - ev[gto_best]).max(0.0)
+            )
+        };
+        Ok(ExploitFeedback { profile: prof.name.clone(), actions, best: Some(best), gto_best, verdict: score.verdict.label().into(), ev_loss_bb: score.ev_loss_bb, summary, tip })
     }
 
     /// Street/Hand mode: apply the hero's answer and play on to the next hero decision.
@@ -782,6 +931,7 @@ impl Engine {
                 Advance::Terminal => Ok(Step { events: out, next: None, result: Some(finish(game, cur, rng)) }),
                 Advance::NeedRiver => {
                     // solve the river subgame from this turn node, then continue in it
+                    cur.stored_history = game.history().to_vec();
                     let mut rg = river_game(game, cur, rng)?;
                     let card = rg.current_board()[4];
                     out.push(format!("River {}", card_to_string(card)));
@@ -802,6 +952,11 @@ impl Engine {
             }
         })
     }
+}
+
+/// The action with the highest EV.
+fn best_index(actions: &[ActionResult]) -> usize {
+    (0..actions.len()).max_by(|&a, &b| actions[a].ev_bb.partial_cmp(&actions[b].ev_bb).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(0)
 }
 
 /// Rebuilds the readable action line of a stored history (for re-drills).
@@ -830,7 +985,7 @@ fn grade(game: &mut PostFlopGame, cur: &Current, chosen: usize, rng_roll: Option
     if chosen >= n_actions {
         bail!("invalid action");
     }
-    let h = hand_index(game, hero, cur.hero_cards).ok_or_else(|| anyhow!("hand not in range"))?;
+    let h = hand_index(game, hero, cur.hero_cards).ok_or_else(|| anyhow!("hand {}{} not in range on {} (history {:?})", card_to_string(cur.hero_cards.0), card_to_string(cur.hero_cards.1), cur.view.street, game.history()))?;
     let nh = game.private_cards(hero).len();
     let strat = game.strategy();
     let evd = game.expected_values_detail(hero);
@@ -856,7 +1011,7 @@ fn grade(game: &mut PostFlopGame, cur: &Current, chosen: usize, rng_roll: Option
         .collect();
     let reason = reason::explain(&cur.view, &actions, &score, chosen, &hand_desc, equity, &cur.spot);
     let lesson = Some(reason::lesson(&cur.view, &actions, &score, chosen, &hand_desc, equity, &cur.spot));
-    Ok(Feedback { chosen, verdict: score.verdict.label().into(), score, actions, hand_desc, equity, reason, lesson, continues: cur.mode != Mode::Spot })
+    Ok(Feedback { chosen, verdict: score.verdict.label().into(), score, actions, hand_desc, equity, reason, lesson, continues: cur.mode != Mode::Spot, exploit: None })
 }
 
 /// For imported hands: view + grade of a real decision at the game's current node.
@@ -888,6 +1043,8 @@ pub(crate) fn grade_real(
         snapshots: vec![],
         dealt: Default::default(),
         villain_moves: Default::default(),
+        profile: Default::default(),
+        exploit: None,
     };
     cur.view = make_view(game, &cur, false);
     let fb = grade(game, &cur, chosen, None, rng)?;
@@ -942,10 +1099,8 @@ fn advance(game: &mut PostFlopGame, cur: &mut Current, rng: &mut Rng, out: &mut 
         }
         let cards = if p == cur.hero { cur.hero_cards } else { cur.villain_cards.unwrap() };
         let idx = hand_index(game, p, cards).ok_or_else(|| anyhow!("hand left the range"))?;
-        let nh = game.private_cards(p).len();
         let actions = game.available_actions();
-        let strat = game.strategy();
-        let probs: Vec<f64> = (0..actions.len()).map(|a| strat[a * nh + idx] as f64).collect();
+        let probs = if p == cur.hero { exploit::villain_probs(game, &Profile::default(), idx) } else { exploit::villain_probs(game, &cur.profile, idx) };
         let key = (len, game.history().to_vec());
         let a = match cur.villain_moves.get(&key) {
             Some(&a) if a < actions.len() => a,
@@ -978,16 +1133,20 @@ fn river_game(game: &mut PostFlopGame, cur: &mut Current, rng: &mut Rng) -> Resu
         _ => cards[rng.below(cards.len() as u64) as usize],
     };
     cur.dealt.insert(4, river);
-    river_subgame(game, river)
+    river_subgame(game, river, &kept(cur))
 }
 
 /// Solves the river after `river` comes, starting from a closed turn node of `game`.
-pub(crate) fn river_subgame(game: &mut PostFlopGame, river: Card) -> Result<PostFlopGame> {
+/// `keep`: real hands that must stay in their player's range even if the solver would never
+/// have reached the river with them (the hero after an off-strategy action, or a villain
+/// playing a profile); they get a tiny weight so the equilibrium barely moves.
+pub(crate) fn river_subgame(game: &mut PostFlopGame, river: Card, keep: &[(usize, (Card, Card))]) -> Result<PostFlopGame> {
     let board = game.current_board();
     let range = |p: usize| -> Result<Range> {
         let w = game.normalized_weights(p);
         let max = w.iter().cloned().fold(0.0f32, f32::max).max(1e-12);
-        let ws: Vec<f32> = w.iter().map(|x| (x / max).clamp(0.0, 1.0)).collect();
+        let mut ws: Vec<f32> = w.iter().map(|x| (x / max).clamp(0.0, 1.0)).collect();
+        floor_kept(game.private_cards(p), &mut ws, p, keep);
         Range::from_hands_weights(game.private_cards(p), &ws).map_err(|e| anyhow!(e))
     };
     let tb = game.total_bet_amount();
@@ -1015,6 +1174,26 @@ pub(crate) fn river_subgame(game: &mut PostFlopGame, river: Card) -> Result<Post
     solve(&mut rg, 400, target, false);
     rg.cache_normalized_weights();
     Ok(rg)
+}
+
+/// Gives each kept hand of player `p` at least a tiny weight (see `river_subgame`).
+pub(crate) fn floor_kept(cards: &[(Card, Card)], ws: &mut [f32], p: usize, keep: &[(usize, (Card, Card))]) {
+    for &(kp, (a, b)) in keep {
+        if kp == p {
+            if let Some(i) = cards.iter().position(|&(x, y)| (x, y) == (a, b) || (y, x) == (a, b)) {
+                ws[i] = ws[i].max(1e-3);
+            }
+        }
+    }
+}
+
+/// The real hands of a played drill (hero, and villain when dealt).
+fn kept(cur: &Current) -> Vec<(usize, (Card, Card))> {
+    let mut k = vec![(cur.hero, cur.hero_cards)];
+    if let Some(v) = cur.villain_cards {
+        k.push((1 - cur.hero, v));
+    }
+    k
 }
 
 fn street_result(game: &mut PostFlopGame, cur: &Current) -> HandResult {

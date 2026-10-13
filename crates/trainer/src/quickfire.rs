@@ -165,6 +165,7 @@ pub fn as_record(q: &Quiz, r: &QuizResult) -> (crate::drill::DrillView, crate::d
         reason: r.why.clone(),
         lesson: None,
         continues: false,
+        exploit: None,
     };
     (view, fb)
 }

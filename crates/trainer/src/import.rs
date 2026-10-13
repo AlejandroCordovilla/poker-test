@@ -412,7 +412,7 @@ impl Analyzer {
                         };
                         let hand_desc = HandDesc { made: hand169::name(cls), draw: None, bucket: Bucket::Medium };
                         let _ = &mut rng;
-                        graded.push(Graded { view, fb: Feedback { chosen, verdict: score.verdict.label().into(), score, actions: acts, hand_desc, equity: 0.0, reason, lesson: None, continues: false }, act_index: Some(a.index) });
+                        graded.push(Graded { view, fb: Feedback { chosen, verdict: score.verdict.label().into(), score, actions: acts, hand_desc, equity: 0.0, reason, lesson: None, continues: false, exploit: None }, act_index: Some(a.index) });
                     }
                 }
             }
@@ -591,7 +591,8 @@ pub fn analyze_postflop(job: &PostJob, max_gb: f64) -> Result<(Vec<Graded>, Stri
             }
             if cur_street == 3 {
                 // river: re-solve live with the full size menu (incl. pot and overbets)
-                game = crate::drill::river_subgame(&mut game, card)?;
+                let keep: Vec<(usize, (Card, Card))> = h.hero_cards.map(|c| vec![(hero_idx, c)]).unwrap_or_default();
+                game = crate::drill::river_subgame(&mut game, card, &keep)?;
             } else {
                 game.play(card as usize);
                 game.cache_normalized_weights();
@@ -928,4 +929,129 @@ pub fn set_alias(db: &Db, name: &str, display: &str) -> Result<()> {
 /// Positions of every player in a hand ("" if the table size isn't modeled).
 pub fn position_of(h: &Hand, name: &str) -> String {
     positions(h).and_then(|p| p.into_iter().find(|x| x.0 == name).map(|x| x.1)).unwrap_or_default()
+}
+
+/// Tendencies of one opponent across the imported hands.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OppStats {
+    pub name: String,
+    pub display: String,
+    pub hands: usize,
+    /// voluntarily put money in preflop / raised preflop, as fractions of hands dealt
+    pub vpip: f64,
+    pub pfr: f64,
+    /// postflop bets and raises per call
+    pub aggression: f64,
+    /// postflop: folds when facing a bet
+    pub fold_to_bet: f64,
+    pub faced_bets: usize,
+    pub postflop_actions: usize,
+}
+
+/// Solver-ish baselines the log profiles are measured against (heads-up postflop).
+const BASE_AGGRESSION: f64 = 2.0;
+const BASE_FOLD: f64 = 0.40;
+
+pub fn opponent_stats(db: &Db) -> Result<Vec<OppStats>> {
+    let names = aliases(db)?;
+    let mut st = db.conn().prepare("SELECT hand_json, hero FROM import_hand WHERE hand_json IS NOT NULL")?;
+    let rows: Vec<(String, String)> = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.filter_map(|r| r.ok()).collect();
+    #[derive(Default)]
+    struct Acc { hands: usize, vpip: usize, pfr: usize, aggr: usize, calls: usize, faced: usize, folds: usize }
+    let mut acc: BTreeMap<String, Acc> = BTreeMap::new();
+    for (json, hero) in rows {
+        let Ok(h) = serde_json::from_str::<Hand>(&json) else { continue };
+        for s in &h.seats {
+            if s.1 != hero {
+                acc.entry(s.1.clone()).or_default().hands += 1;
+            }
+        }
+        let mut street = 0u8;
+        let mut put: HashMap<&str, f64> = HashMap::new();
+        let mut top = 0.0f64;
+        let mut vp: std::collections::HashSet<&str> = Default::default();
+        let mut pr: std::collections::HashSet<&str> = Default::default();
+        for a in &h.acts {
+            let s = if a.street == 9 { 0 } else { a.street };
+            if s != street {
+                street = s;
+                put.clear();
+                top = 0.0;
+            }
+            let mine = put.get(a.player.as_str()).copied().unwrap_or(0.0);
+            let facing = top > mine + 1e-9;
+            if a.street != 9 && a.player != hero {
+                let e = acc.entry(a.player.clone()).or_default();
+                if s == 0 {
+                    if matches!(a.kind, Kind::Call | Kind::Raise | Kind::Bet) {
+                        vp.insert(a.player.as_str());
+                    }
+                    if a.kind == Kind::Raise {
+                        pr.insert(a.player.as_str());
+                    }
+                } else {
+                    match a.kind {
+                        Kind::Bet | Kind::Raise => e.aggr += 1,
+                        Kind::Call => e.calls += 1,
+                        _ => {}
+                    }
+                    if facing {
+                        e.faced += 1;
+                        if a.kind == Kind::Fold {
+                            e.folds += 1;
+                        }
+                    }
+                }
+            }
+            if matches!(a.kind, Kind::Bet | Kind::Raise | Kind::Call) {
+                put.insert(a.player.as_str(), a.amount);
+                top = top.max(a.amount);
+            }
+        }
+        for p in vp {
+            acc.entry(p.to_string()).or_default().vpip += 1;
+        }
+        for p in pr {
+            acc.entry(p.to_string()).or_default().pfr += 1;
+        }
+    }
+    let mut out: Vec<OppStats> = acc
+        .into_iter()
+        .filter(|(_, a)| a.hands > 0)
+        .map(|(name, a)| OppStats {
+            display: names.get(&name).cloned().unwrap_or(name.clone()),
+            name,
+            hands: a.hands,
+            vpip: a.vpip as f64 / a.hands as f64,
+            pfr: a.pfr as f64 / a.hands as f64,
+            aggression: a.aggr as f64 / (a.calls.max(1)) as f64,
+            fold_to_bet: if a.faced > 0 { a.folds as f64 / a.faced as f64 } else { BASE_FOLD },
+            faced_bets: a.faced,
+            postflop_actions: a.aggr + a.calls,
+        })
+        .collect();
+    out.sort_by(|a, b| b.hands.cmp(&a.hands));
+    Ok(out)
+}
+
+/// A villain profile from an opponent's logged tendencies (None below 10 faced bets or 15
+/// postflop bets/calls: too little to say).
+pub fn log_profile(s: &OppStats) -> Option<crate::exploit::Profile> {
+    if s.faced_bets < 10 || s.postflop_actions < 15 {
+        return None;
+    }
+    let ag = s.aggression / BASE_AGGRESSION;
+    let bluff = ag.clamp(0.3, 3.0);
+    let value = ag.sqrt().clamp(0.5, 2.0);
+    let fold = (s.fold_to_bet / BASE_FOLD).clamp(0.25, 2.5);
+    let call = ((1.0 - s.fold_to_bet) / (1.0 - BASE_FOLD)).clamp(0.5, 2.0);
+    let blurb = format!(
+        "From your logs ({} hands): VPIP {:.0}%, PFR {:.0}%, aggression {:.1}, folds {:.0}% to bets.",
+        s.hands,
+        s.vpip * 100.0,
+        s.pfr * 100.0,
+        s.aggression,
+        s.fold_to_bet * 100.0
+    );
+    Some(crate::exploit::Profile::new(&format!("log:{}", s.name), &s.display, &blurb, bluff, value, fold, call))
 }

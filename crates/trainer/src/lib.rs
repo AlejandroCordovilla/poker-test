@@ -3,6 +3,7 @@
 
 pub mod db;
 pub mod drill;
+pub mod exploit;
 pub mod import;
 pub mod quickfire;
 pub mod ranges;

@@ -66,8 +66,9 @@ fn meta(state: tauri::State<AppState>) -> Meta {
 }
 
 #[tauri::command]
-fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String, game_mode: Option<Mode>) -> Result<DrillView, String> {
+fn new_drill(state: tauri::State<AppState>, filters: Filters, mode: String, game_mode: Option<Mode>, profile: Option<trainer::exploit::Profile>) -> Result<DrillView, String> {
     let mut f = filters;
+    state.engine.lock().unwrap().set_profile(profile.unwrap_or_default());
     if mode == "leaks" {
         let db = state.db.lock().unwrap();
         match db.worst_category(5).map_err(err)? {
@@ -207,6 +208,27 @@ fn import_replay(state: tauri::State<AppState>, hand_id: String) -> Result<impor
     import::replay(&state.db.lock().unwrap(), &hand_id).map_err(err)
 }
 
+#[derive(Serialize)]
+struct LogProfile {
+    stats: import::OppStats,
+    profile: Option<trainer::exploit::Profile>,
+}
+
+#[derive(Serialize)]
+struct Profiles {
+    presets: Vec<trainer::exploit::Profile>,
+    from_logs: Vec<LogProfile>,
+}
+
+#[tauri::command]
+fn profiles(state: tauri::State<AppState>) -> Result<Profiles, String> {
+    let stats = import::opponent_stats(&state.db.lock().unwrap()).map_err(err)?;
+    Ok(Profiles {
+        presets: trainer::exploit::presets(),
+        from_logs: stats.into_iter().map(|s| LogProfile { profile: import::log_profile(&s), stats: s }).collect(),
+    })
+}
+
 #[tauri::command]
 fn import_status(state: tauri::State<AppState>) -> ImportProgress {
     state.import_progress.lock().unwrap().clone()
@@ -323,7 +345,7 @@ fn main() {
             import_progress: progress,
             quiz: Mutex::new((None, poker_core_rng::Rng::new(seed ^ 0x5151))),
         })
-        .invoke_handler(tauri::generate_handler![meta, new_drill, answer, continue_hand, review, rewind, summary, leaks, attempts, redrill, import_preview, import_run, import_status, import_hands, import_hand_detail, range_task, quiz_deal, quiz_answer, import_replay])
+        .invoke_handler(tauri::generate_handler![meta, new_drill, answer, continue_hand, review, rewind, summary, leaks, attempts, redrill, import_preview, import_run, import_status, import_hands, import_hand_detail, range_task, quiz_deal, quiz_answer, import_replay, profiles])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
