@@ -220,3 +220,52 @@ table.inner { margin-top: 4px; }
 .stats.small .v { font-size: 22px; }
 .rb-result .primary { margin-top: 10px; }
 @media (max-width: 1000px) { .rb { grid-template-columns: 1fr; } }
+
+/* PokerNow-style table */
+.table { position: relative; min-height: 470px; padding: 112px 150px 104px; display: block; }
+.table-meta { position: absolute; top: 12px; right: 28px; font-size: 12px; opacity: .8; }
+.felt-center { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.felt-center .hand { margin-top: 6px; }
+.pseat { position: absolute; background: rgba(0,0,0,.32); border: 1px solid rgba(255,255,255,.12); border-radius: 12px; padding: 7px 12px; min-width: 132px; text-align: center; color: #eef3ef; }
+.pseat.me { border-color: rgba(255,255,255,.45); }
+.pseat.folded { opacity: .45; }
+.seat-top { top: 14px; left: 50%; transform: translateX(-50%); }
+.seat-bottom { bottom: 12px; left: 50%; transform: translateX(-50%); }
+.seat-left { left: 14px; top: 50%; transform: translateY(-50%); }
+.pseat-top { display: flex; align-items: center; justify-content: center; gap: 6px; font-size: 13px; }
+.pos { font-weight: 700; font-size: 12px; background: rgba(255,255,255,.15); border-radius: 5px; padding: 0 6px; }
+.dealer { width: 18px; height: 18px; border-radius: 50%; background: #f4efe2; color: #1d2320; font-size: 11px; font-weight: 800; display: inline-flex; align-items: center; justify-content: center; }
+.who { font-weight: 600; }
+.stack { font-variant-numeric: tabular-nums; font-size: 13px; }
+.pre { font-size: 11px; color: rgba(238,243,239,.7) !important; }
+.bubble { margin-top: 6px; display: inline-block; padding: 2px 10px; border-radius: 99px; font-size: 12px; font-weight: 700; background: #f4efe2; color: #1d2320; }
+.bubble.bet, .bubble.raise { background: #d0662b; color: #fff; }
+.bubble.allin { background: #8f2430; color: #fff; }
+.bubble.call { background: #3d8a5a; color: #fff; }
+.bubble.check { background: #e6e2d6; color: #1d2320; }
+.bubble.fold { background: #7c8ea3; color: #fff; }
+.pseat .vh { margin: 6px 0 0; display: flex; gap: 4px; justify-content: center; }
+@media (max-width: 1100px) { .table { padding: 84px 20px 110px; } .seat-left { top: 12px; left: 12px; transform: none; } }
+
+/* timeline + review */
+.timeline { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 12px 0 2px; }
+.tl { font-size: 12.5px; border: 1px solid var(--line); background: var(--panel); border-radius: 99px; padding: 3px 11px; }
+.tl.best, .tl.correct { border-color: var(--best); color: var(--best); }
+.tl.inacc { border-color: var(--inacc); color: var(--inacc); }
+.tl.wrong, .tl.blunder { border-color: var(--wrong); color: var(--wrong); }
+.tl.open { border-style: dashed; color: var(--muted); }
+.tl.sel { box-shadow: 0 0 0 2px var(--accent-soft); }
+.tl-hint { font-size: 12px; color: var(--muted); }
+.feedback.viewing { border-color: var(--accent); }
+.viewing-head { margin-bottom: 6px; color: var(--muted); }
+.row-btns { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-top: 12px; }
+.hand-review { margin: 10px 0 4px; }
+.hand-review h3 { margin: 6px 0; }
+
+/* lesson */
+.lesson { margin: 12px 0 4px; line-height: 1.55; }
+.lesson p { margin: 6px 0; }
+.l-verdict { font: 600 16px Georgia, serif; }
+.l-pain { color: var(--wrong); }
+.l-analogy { font-style: italic; }
+.l-rule { background: var(--accent-soft); color: var(--ink); padding: 8px 12px; border-radius: 8px; border-left: 3px solid var(--accent); }

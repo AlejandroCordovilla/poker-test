@@ -395,10 +395,11 @@ impl Analyzer {
                             situation: sit.into(),
                             decision: 1,
                             live_solved: false,
+                            seats: vec![],
                         };
                         let hand_desc = HandDesc { made: hand169::name(cls), draw: None, bucket: Bucket::Medium };
                         let _ = &mut rng;
-                        graded.push(Graded { view, fb: Feedback { chosen, verdict: score.verdict.label().into(), score, actions: acts, hand_desc, equity: 0.0, reason, continues: false } });
+                        graded.push(Graded { view, fb: Feedback { chosen, verdict: score.verdict.label().into(), score, actions: acts, hand_desc, equity: 0.0, reason, lesson: None, continues: false } });
                     }
                 }
             }

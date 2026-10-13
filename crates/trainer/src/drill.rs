@@ -108,6 +108,25 @@ pub struct DrillView {
     pub decision: usize,
     /// the river was solved on the spot for this decision
     pub live_solved: bool,
+    /// every seat at the table, PokerNow style
+    #[serde(default)]
+    pub seats: Vec<SeatView>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeatView {
+    pub pos: String,
+    /// "You", "Villain", or "" for players out of the hand
+    pub who: String,
+    pub dealer: bool,
+    pub in_hand: bool,
+    pub stack_bb: f64,
+    /// what they did preflop: "Raise 2.5bb", "Call", "3-bet", "Fold"
+    pub preflop: String,
+    /// their latest action on this street, e.g. "Bet 1.8bb", "Check" ("" if none yet)
+    pub action: String,
+    /// "bet", "raise", "call", "check", "fold", "allin" for coloring
+    pub action_kind: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -130,6 +149,8 @@ pub struct Feedback {
     pub hand_desc: HandDesc,
     pub equity: f64,
     pub reason: String,
+    /// Karpathy-style breakdown (verdict, pain, idea, analogy, proof, rule)
+    pub lesson: Option<reason::Lesson>,
     /// Street/Hand mode: the hand goes on after this decision (call `continue_hand`)
     pub continues: bool,
 }
@@ -149,6 +170,27 @@ pub struct Step {
     pub events: Vec<String>,
     pub next: Option<DrillView>,
     pub result: Option<HandResult>,
+}
+
+/// One hero decision in a hand, kept so the player can go back to it or replay from it.
+#[derive(Clone)]
+struct Snapshot {
+    stored_history: Vec<usize>,
+    /// river card and river-subgame history, for decisions on the river
+    river: Option<(Card, Vec<usize>)>,
+    line: Vec<String>,
+    events: Vec<Ev>,
+    decision: usize,
+    view: DrillView,
+    feedback: Option<Feedback>,
+}
+
+/// A past decision for the review screen.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReviewItem {
+    pub index: usize,
+    pub view: DrillView,
+    pub feedback: Option<Feedback>,
 }
 
 #[derive(Clone, Copy)]
@@ -172,6 +214,26 @@ struct Current {
     chosen: Option<usize>,
     decision: usize,
     stored_history: Vec<usize>,
+    snapshots: Vec<Snapshot>,
+    /// cards dealt so far, by board length before the deal (3 = turn, 4 = river): replays reuse them
+    dealt: std::collections::HashMap<usize, Card>,
+    /// villain choices by (board length, history): replays repeat them on the same line
+    villain_moves: std::collections::HashMap<(usize, Vec<usize>), usize>,
+}
+
+impl Current {
+    fn snap(&mut self, game: &PostFlopGame) {
+        let river = if game.current_board().len() == 5 { self.dealt.get(&4).map(|&c| (c, game.history().to_vec())) } else { None };
+        self.snapshots.push(Snapshot {
+            stored_history: self.stored_history.clone(),
+            river,
+            line: self.line.clone(),
+            events: self.events.clone(),
+            decision: self.decision,
+            view: self.view.clone(),
+            feedback: None,
+        });
+    }
 }
 
 pub struct Engine {
@@ -461,8 +523,12 @@ impl Engine {
             chosen: None,
             decision: 1,
             stored_history: history,
+            snapshots: vec![],
+            dealt: Default::default(),
+            villain_moves: Default::default(),
         };
         cur.view = make_view(game, &cur, false);
+        cur.snap(game);
         let v = cur.view.clone();
         self.current = Some(cur);
         Ok(Some(v))
@@ -503,6 +569,9 @@ impl Engine {
             chosen: None,
             decision: 0,
             stored_history: Vec::new(),
+            snapshots: vec![],
+            dealt: Default::default(),
+            villain_moves: Default::default(),
         };
         // auto-play both hands until the hero's first decision on the target street
         let mut out = Vec::new();
@@ -515,6 +584,7 @@ impl Engine {
         cur.decision = 1;
         cur.stored_history = game.history().to_vec();
         cur.view = make_view(game, &cur, false);
+        cur.snap(game);
         let v = cur.view.clone();
         self.current = Some(cur);
         Ok(Some(v))
@@ -546,9 +616,56 @@ impl Engine {
             chosen: None,
             decision: 1,
             stored_history: history.to_vec(),
+            snapshots: vec![],
+            dealt: Default::default(),
+            villain_moves: Default::default(),
         };
         cur.view = make_view(game, &cur, false);
         Ok((game, cur.view))
+    }
+
+    /// Every hero decision of the current drill so far (with its grade once answered).
+    pub fn review(&self) -> Vec<ReviewItem> {
+        self.current
+            .as_ref()
+            .map(|c| c.snapshots.iter().enumerate().map(|(i, s)| ReviewItem { index: i, view: s.view.clone(), feedback: s.feedback.clone() }).collect())
+            .unwrap_or_default()
+    }
+
+    /// Goes back to decision `i` (0 = the start of the hand) with the same cards, so the
+    /// player can try another line. Later decisions are dropped.
+    pub fn rewind(&mut self, i: usize) -> Result<DrillView> {
+        let mut cur = self.current.take().ok_or_else(|| anyhow!("no drill in progress"))?;
+        if i >= cur.snapshots.len() {
+            self.current = Some(cur);
+            bail!("no such decision");
+        }
+        let snap = cur.snapshots[i].clone();
+        cur.snapshots.truncate(i + 1);
+        cur.snapshots[i].feedback = None;
+        cur.stored_history = snap.stored_history.clone();
+        cur.line = snap.line;
+        cur.events = snap.events;
+        cur.decision = snap.decision;
+        cur.view = snap.view.clone();
+        cur.chosen = None;
+        cur.river = None;
+        if let Err(e) = self.load(&cur.spot.clone()) {
+            self.current = Some(cur);
+            return Err(e);
+        }
+        let game = &mut self.cache.last_mut().unwrap().1;
+        game.apply_history(&cur.stored_history);
+        game.cache_normalized_weights();
+        if let Some((card, rh)) = snap.river {
+            let mut rg = river_subgame(game, card)?;
+            rg.apply_history(&rh);
+            rg.cache_normalized_weights();
+            cur.river = Some(Box::new(rg));
+        }
+        let v = cur.view.clone();
+        self.current = Some(cur);
+        Ok(v)
     }
 
     /// (history JSON, hero cards) of the current decision, for logging and re-drilling.
@@ -584,9 +701,13 @@ impl Engine {
             chosen: None,
             decision: 1,
             stored_history: history,
+            snapshots: vec![],
+            dealt: Default::default(),
+            villain_moves: Default::default(),
         };
         cur.line = replay_line(game, &cur);
         cur.view = make_view(game, &cur, false);
+        cur.snap(game);
         let v = cur.view.clone();
         self.current = Some(cur);
         Ok(v)
@@ -622,6 +743,9 @@ impl Engine {
             }
             let fb = grade(game, cur, chosen, rng_roll, rng)?;
             cur.chosen = Some(chosen);
+            if let Some(sn) = cur.snapshots.last_mut() {
+                sn.feedback = Some(fb.clone());
+            }
             Ok(fb)
         })
     }
@@ -646,10 +770,12 @@ impl Engine {
             match advance(game, cur, rng, &mut out, false)? {
                 Advance::HeroTurn => {
                     cur.decision += 1;
-                    if cur.river.is_none() {
+                    let on_river = game.current_board().len() == 5;
+                    if !on_river {
                         cur.stored_history = game.history().to_vec();
                     }
-                    cur.view = make_view(game, cur, cur.river.is_some());
+                    cur.view = make_view(game, cur, on_river);
+                    cur.snap(game);
                     Ok(Step { events: out, next: Some(cur.view.clone()), result: None })
                 }
                 Advance::StreetDone => Ok(Step { events: out, next: None, result: Some(street_result(game, cur)) }),
@@ -664,6 +790,7 @@ impl Engine {
                         Advance::HeroTurn => {
                             cur.decision += 1;
                             cur.view = make_view(&mut rg, cur, true);
+                            cur.snap(&rg);
                             Step { events: out, next: Some(cur.view.clone()), result: None }
                         }
                         Advance::Terminal => Step { events: out, next: None, result: Some(finish(&mut rg, cur, rng)) },
@@ -728,7 +855,8 @@ fn grade(game: &mut PostFlopGame, cur: &Current, chosen: usize, rng_roll: Option
         })
         .collect();
     let reason = reason::explain(&cur.view, &actions, &score, chosen, &hand_desc, equity, &cur.spot);
-    Ok(Feedback { chosen, verdict: score.verdict.label().into(), score, actions, hand_desc, equity, reason, continues: cur.mode != Mode::Spot })
+    let lesson = Some(reason::lesson(&cur.view, &actions, &score, chosen, &hand_desc, equity, &cur.spot));
+    Ok(Feedback { chosen, verdict: score.verdict.label().into(), score, actions, hand_desc, equity, reason, lesson, continues: cur.mode != Mode::Spot })
 }
 
 /// For imported hands: view + grade of a real decision at the game's current node.
@@ -757,6 +885,9 @@ pub(crate) fn grade_real(
         chosen: None,
         decision: 1,
         stored_history: vec![],
+        snapshots: vec![],
+        dealt: Default::default(),
+        villain_moves: Default::default(),
     };
     cur.view = make_view(game, &cur, false);
     let fb = grade(game, &cur, chosen, None, rng)?;
@@ -792,7 +923,11 @@ fn advance(game: &mut PostFlopGame, cur: &mut Current, rng: &mut Rng, out: &mut 
             let (h, v) = (cur.hero_cards, cur.villain_cards.unwrap());
             let possible = game.possible_cards();
             let cards: Vec<u8> = (0..52u8).filter(|&c| possible >> c & 1 == 1 && ![h.0, h.1, v.0, v.1].contains(&c)).collect();
-            let c = cards[rng.below(cards.len() as u64) as usize];
+            let c = match cur.dealt.get(&len) {
+                Some(&c) if cards.contains(&c) => c,
+                _ => cards[rng.below(cards.len() as u64) as usize],
+            };
+            cur.dealt.insert(len, c);
             game.play(c as usize);
             game.cache_normalized_weights();
             let s = format!("Turn {}", card_to_string(c));
@@ -811,7 +946,12 @@ fn advance(game: &mut PostFlopGame, cur: &mut Current, rng: &mut Rng, out: &mut 
         let actions = game.available_actions();
         let strat = game.strategy();
         let probs: Vec<f64> = (0..actions.len()).map(|a| strat[a * nh + idx] as f64).collect();
-        let a = sample(&probs, rng).unwrap_or(0);
+        let key = (len, game.history().to_vec());
+        let a = match cur.villain_moves.get(&key) {
+            Some(&a) if a < actions.len() => a,
+            _ => sample(&probs, rng).unwrap_or(0),
+        };
+        cur.villain_moves.insert(key, a);
         let before = game.total_bet_amount();
         let s = describe_action(&pos_name(&cur.spot, p), actions[a], before, p);
         out.push(s.clone());
@@ -829,11 +969,15 @@ fn position_ok(f: &Filters, hero: usize) -> bool {
 /// River subgame from the turn node that just closed: both ranges as they stand, real pot
 /// and stacks, the full live river menu (33 / 75 / 100 / 150% / all-in). One street, so it
 /// solves in about a second.
-fn river_game(game: &mut PostFlopGame, cur: &Current, rng: &mut Rng) -> Result<PostFlopGame> {
+fn river_game(game: &mut PostFlopGame, cur: &mut Current, rng: &mut Rng) -> Result<PostFlopGame> {
     let (h, v) = (cur.hero_cards, cur.villain_cards.unwrap());
     let possible = game.possible_cards();
     let cards: Vec<u8> = (0..52u8).filter(|&c| possible >> c & 1 == 1 && ![h.0, h.1, v.0, v.1].contains(&c)).collect();
-    let river = cards[rng.below(cards.len() as u64) as usize];
+    let river = match cur.dealt.get(&4) {
+        Some(&c) if cards.contains(&c) => c,
+        _ => cards[rng.below(cards.len() as u64) as usize],
+    };
+    cur.dealt.insert(4, river);
     river_subgame(game, river)
 }
 
@@ -911,8 +1055,10 @@ fn finish(game: &mut PostFlopGame, cur: &Current, rng: &mut Rng) -> HandResult {
     }
     let hv = evaluate(mask_of(&board) | mask_of(&[h.0, h.1]));
     let vv = evaluate(mask_of(&board) | mask_of(&[v.0, v.1]));
-    let vd = describe([v.0, v.1], &board).made;
-    let hd = describe([h.0, h.1], &board).made;
+    // "a flush" -> "flush" after "your" / "BTN's"
+    let bare = |x: String| x.strip_prefix("a ").or_else(|| x.strip_prefix("an ")).map(String::from).unwrap_or(x);
+    let vd = bare(describe([v.0, v.1], &board).made);
+    let hd = bare(describe([h.0, h.1], &board).made);
     let (summary, won) = match hv.cmp(&vv) {
         std::cmp::Ordering::Greater => (format!("Showdown: your {hd} beats {villain}'s {vd}. You win {}.", fmt_bb(pot)), Some(true)),
         std::cmp::Ordering::Less => (format!("Showdown: {villain}'s {vd} beats your {hd}. {villain} wins {}.", fmt_bb(pot)), Some(false)),
@@ -947,6 +1093,7 @@ fn placeholder_view() -> DrillView {
         situation: String::new(),
         decision: 0,
         live_solved: false,
+        seats: vec![],
     }
 }
 
@@ -1021,7 +1168,76 @@ fn make_view(game: &mut PostFlopGame, cur: &Current, live: bool) -> DrillView {
         situation: situation(cur, len, to_call, raised),
         decision: cur.decision.max(1),
         live_solved: live,
+        seats: seats(cur, len, chips_bb(tc.effective_stack - tb[hero]), chips_bb(tc.effective_stack - tb[1 - hero])),
     }
+}
+
+/// Three-handed table: the two players in the pot plus the one who folded preflop.
+fn seats(cur: &Current, board_len: usize, hero_stack: f64, villain_stack: f64) -> Vec<SeatView> {
+    let spot = &cur.spot;
+    let mut it = spot.matchup.split(" vs ");
+    let (opener, responder) = (it.next().unwrap_or("").to_string(), it.next().unwrap_or("").to_string());
+    let hero_pos = pos_name(spot, cur.hero);
+    let pre = |p: &str| -> String {
+        if p == opener {
+            let open = if p == "SB" { 3.0 } else { 2.5 };
+            if spot.pot_type == "srp" { format!("Raise {open}bb") } else { format!("Raise {open}bb, call 3-bet") }
+        } else if p == responder {
+            if spot.pot_type == "srp" { "Call".into() } else { "3-bet".into() }
+        } else {
+            "Fold".into()
+        }
+    };
+    // last action of each position on the current street, read from the line
+    let street_start = cur.line.iter().rposition(|l| l.starts_with("Turn ") || l.starts_with("River ")).map(|i| i + 1).unwrap_or(0);
+    let on_street = board_len > 3 || street_start == 0;
+    let last = |p: &str| -> (String, String) {
+        if !on_street && board_len == 3 && street_start > 0 {
+            return (String::new(), String::new());
+        }
+        cur.line[street_start..]
+            .iter()
+            .rev()
+            .find_map(|l| l.strip_prefix(&format!("{p} ")).map(|rest| rest.to_string()))
+            .map(|rest| {
+                let k = rest.split_whitespace().next().unwrap_or("").to_string();
+                let kind = match k.as_str() {
+                    "bets" => "bet",
+                    "raises" => "raise",
+                    "calls" => "call",
+                    "checks" => "check",
+                    "folds" => "fold",
+                    "goes" => "allin",
+                    _ => "",
+                };
+                let label = rest
+                    .replacen("bets", "Bet", 1)
+                    .replacen("raises to", "Raise to", 1)
+                    .replacen("calls", "Call", 1)
+                    .replacen("checks", "Check", 1)
+                    .replacen("folds", "Fold", 1)
+                    .replacen("goes all-in", "All-in", 1);
+                (label, kind.to_string())
+            })
+            .unwrap_or_default()
+    };
+    ["BTN", "SB", "BB"]
+        .iter()
+        .map(|&p| {
+            let in_hand = p == opener || p == responder;
+            let (action, action_kind) = if in_hand { last(p) } else { (String::new(), String::new()) };
+            SeatView {
+                pos: p.into(),
+                who: if p == hero_pos { "You".into() } else if in_hand { "Villain".into() } else { String::new() },
+                dealer: p == "BTN",
+                in_hand,
+                stack_bb: if p == hero_pos { hero_stack } else if in_hand { villain_stack } else { spot.stack as f64 - if p == "SB" { 0.5 } else if p == "BB" { 1.0 } else { 0.0 } },
+                preflop: pre(p),
+                action,
+                action_kind,
+            }
+        })
+        .collect()
 }
 
 fn preflop_line(s: &SpotInfo) -> String {

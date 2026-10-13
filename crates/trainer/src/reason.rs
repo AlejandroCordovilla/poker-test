@@ -93,3 +93,155 @@ pub fn explain(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, h
     out.push(format!("Across all hands here the solver plays: {}.", r.join(", ")));
     out.join(" ")
 }
+
+/// A Karpathy-style lesson for one decision: say the thing, show the pain, one core idea,
+/// one analogy, prove it with the numbers, then a rule to rebuild it next time.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct Lesson {
+    /// the verdict in one line
+    pub verdict: String,
+    /// what the wrong move costs (empty when the player was right)
+    pub pain: String,
+    /// name of the core idea
+    pub concept: String,
+    /// the core idea in one or two sentences
+    pub idea: String,
+    pub analogy: String,
+    /// the numbers that prove it
+    pub proof: String,
+    /// a one-line rule to apply next time (the "rebuild it" step)
+    pub rule: String,
+}
+
+fn bb(x: f64) -> String {
+    format!("{x:.1}bb")
+}
+
+pub fn lesson(v: &DrillView, acts: &[ActionResult], s: &Score, chosen: usize, hand: &HandDesc, equity: f64, spot: &SpotInfo) -> Lesson {
+    let target = &acts[s.target];
+    let tk = kind(&target.label);
+    let ck = kind(&acts[chosen].label);
+    let hand_txt = match &hand.draw {
+        Some(d) if hand.bucket <= Bucket::Draw => format!("{} with a {d}", hand.made),
+        Some(d) => format!("{} plus a {d}", hand.made),
+        None => hand.made.clone(),
+    };
+    let aggressor = v.hero == spot.preflop_aggressor;
+    let facing = v.to_call_bb > 0.0;
+    let need = if facing { v.to_call_bb / (v.pot_bb + v.to_call_bb) } else { 0.0 };
+    let size_frac = |label: &str| -> Option<f64> {
+        label.split('(').nth(1).and_then(|x| x.trim_end_matches(')').trim_end_matches(" pot").trim_end_matches('%').parse::<f64>().ok()).map(|x| x / 100.0)
+    };
+    let target_big = matches!(tk, "allin") || size_frac(&target.label).is_some_and(|f| f >= 0.74);
+    let loss = s.ev_loss_bb;
+    let right = chosen == s.target || loss <= 0.01;
+
+    // 1) say the thing
+    let verdict = if right {
+        format!("{} is right here with {hand_txt}.", target.label)
+    } else if s.mixed && !s.rare {
+        format!("Close: the solver prefers {} but also plays {} with {hand_txt}.", target.label, acts[chosen].label)
+    } else {
+        format!("{} beats {} here with {hand_txt}.", target.label, acts[chosen].label)
+    };
+
+    // 2) core idea + analogy + rule, by the type of decision the solver chose
+    let (concept, idea, analogy, rule) = match (tk, facing) {
+        ("fold", true) | ("call", true) => (
+            "Pot odds".to_string(),
+            format!(
+                "When you face a bet, the only question is price vs. equity. You pay {} to win a pot of {}, so you need to win about {} of the time.",
+                bb(v.to_call_bb), bb(v.pot_bb + v.to_call_bb), pct(need)
+            ),
+            "It's a bet at the betting window: if the payout is 3-to-1, your horse has to win more than 1 race in 4 or you're donating.".to_string(),
+            "Facing a bet: price = call ÷ (pot after you call). Continue only if your equity beats the price.".to_string(),
+        ),
+        ("raise" | "allin", true) => (
+            if hand.bucket >= Bucket::Strong { "Raise for value" } else { "Fold equity" }.to_string(),
+            if hand.bucket >= Bucket::Strong {
+                "You're ahead of most of what bets here, so you want more chips in now, before a scary card freezes the action.".to_string()
+            } else {
+                "A raise wins two ways: they fold right now, or you hit and win a bigger pot. A hand with outs makes the best raise because it isn't dead when called.".to_string()
+            },
+            if hand.bucket >= Bucket::Strong { "If someone's already buying, you raise the price while they still want it.".to_string() } else { "It's a fake-out with a backup plan: if the bluff gets called, you still have outs.".to_string() },
+            "Raise with the top of your range and with your best draws; call with the middle.".to_string(),
+        ),
+        ("check", false) => match hand.bucket {
+            Bucket::Nuts | Bucket::Strong => (
+                "Protect your checks".to_string(),
+                "If you only check weak hands, an aggressive player bets every time you check. Keeping some strong hands in your checks makes that auto-bet lose money.".to_string(),
+                "A shop that sometimes leaves the door unlocked with a guard dog inside: burglars stop trying every door.".to_string(),
+                "Check some strong hands too, so 'check' never means 'I give up'.".to_string(),
+            ),
+            Bucket::Medium | Bucket::Weak => (
+                "Pot control".to_string(),
+                format!("{hand_txt} beats bluffs but loses to value. Betting mostly gets called by better and folds out worse, so you're betting into the wrong half of their range."),
+                "Don't start a fight you can only win against people who'd have walked away anyway.".to_string(),
+                "Medium hands want a cheap showdown: check, and decide on their bet.".to_string(),
+            ),
+            _ => (
+                "Pick good bluffs".to_string(),
+                format!("With {} equity and no draw, betting needs folds right now and has no backup plan. Better bluffs are hands that can still improve.", pct(equity)),
+                "A bluff with outs is a fake-out with a parachute. Pure air is jumping without one.".to_string(),
+                "Bluff with draws and overcards; give up with pure air on bad boards.".to_string(),
+            ),
+        },
+        _ => {
+            // betting
+            if target_big {
+                (
+                    "Polarization".to_string(),
+                    "Big bets are for the two ends of your range: very strong hands that want to get paid, and draws or bluffs that want folds. Medium hands bet small or check.".to_string(),
+                    "A big bet is shouting. You only shout when you either have the goods or you really need them to back off.".to_string(),
+                    "Bet big with the nuts and your best draws; bet small or check with the middle.".to_string(),
+                )
+            } else if aggressor && v.street == "flop" {
+                (
+                    "Range advantage".to_string(),
+                    format!("As the preflop raiser on a {} board, you have more strong hands than they do. A small bet makes money with almost your whole range because they have to fold a lot of hands.", v.texture),
+                    "Like a landlord collecting small rent from every tenant: a little from many beats a lot from a few.".to_string(),
+                    "As the preflop raiser on boards that favor you, bet small and often.".to_string(),
+                )
+            } else if hand.bucket >= Bucket::Medium {
+                (
+                    "Value".to_string(),
+                    format!("{hand_txt} is ahead of the hands that will call. A bet gets paid by worse; checking lets them see a free card."),
+                    "You're selling something: price it so the buyers who are worse off still buy.".to_string(),
+                    "Bet when worse hands call. Size up when they'll still call bigger.".to_string(),
+                )
+            } else {
+                (
+                    "Fold equity".to_string(),
+                    format!("{hand_txt} rarely wins at showdown, so the bet's job is to win the pot now, and your draw is the backup when they call."),
+                    "A fake-out with a backup plan.".to_string(),
+                    "Semi-bluff with draws; they win now or win later.".to_string(),
+                )
+            }
+        }
+    };
+
+    // 3) the pain: what the chosen move costs
+    let pain = if right {
+        String::new()
+    } else {
+        let what = match (ck, facing) {
+            ("call", true) => format!("Calling pays {} to win {} with about {} equity when you need {}.", bb(v.to_call_bb), bb(v.pot_bb + v.to_call_bb), pct(equity), pct(need)),
+            ("fold", true) => format!("Folding throws away about {} equity when the price only needs {}.", pct(equity), pct(need)),
+            ("check", false) => "Checking gives up value (or a profitable bluff) the solver takes here.".to_string(),
+            _ => format!("{} puts chips in where the solver doesn't want them.", acts[chosen].label),
+        };
+        format!("{what} That costs about {} each time ({:.1}% of the pot), so {} over 100 times.", bb(loss), s.ev_loss_pct, bb(loss * 100.0))
+    };
+
+    // 4) proof: the numbers
+    let mut proof = acts.iter().map(|a| format!("{} {} (solver {} with this hand)", a.label, bb(a.ev_bb), pct(a.freq_hand))).collect::<Vec<_>>().join(" · ");
+    if facing {
+        proof = format!("Need {} equity, have about {}. {proof}", pct(need), pct(equity));
+    } else {
+        proof = format!("Your equity vs their range: about {}. {proof}", pct(equity));
+    }
+    if s.mixed {
+        proof.push_str(". The solver mixes here, so being on the right side of the mix matters less than mixing at all.");
+    }
+    Lesson { verdict, pain, concept, idea, analogy, proof, rule }
+}

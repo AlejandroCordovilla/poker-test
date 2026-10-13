@@ -41,7 +41,12 @@ export type DrillView = {
   decision: number;
   live_solved: boolean;
   hero_is_aggressor: boolean;
+  seats: SeatView[];
 };
+
+export type SeatView = { pos: string; who: string; dealer: boolean; in_hand: boolean; stack_bb: number; preflop: string; action: string; action_kind: string };
+export type Lesson = { verdict: string; pain: string; concept: string; idea: string; analogy: string; proof: string; rule: string };
+export type ReviewItem = { index: number; view: DrillView; feedback: Feedback | null };
 
 export type ActionResult = { label: string; kind: string; ev_bb: number; freq_hand: number; freq_range: number };
 
@@ -53,6 +58,7 @@ export type Feedback = {
   hand_desc: { made: string; draw: string | null; bucket: string };
   equity: number;
   reason: string;
+  lesson: Lesson | null;
   continues: boolean;
 };
 
@@ -85,6 +91,8 @@ export const api = {
   newDrill: (filters: Filters, mode: string, gameMode: GameMode) => invoke<DrillView>("new_drill", { filters, mode, gameMode }),
   answer: (index: number, rng: number | null) => invoke<Feedback>("answer", { index, rng }),
   continueHand: () => invoke<Step>("continue_hand"),
+  review: () => invoke<ReviewItem[]>("review"),
+  rewind: (index: number) => invoke<DrillView>("rewind", { index }),
   summary: () => invoke<Summary>("summary"),
   leaks: (source: string | null, opponent: string | null) => invoke<LeakReport>("leaks", { source, opponent }),
   attempts: (stat: string | null, source: string | null, opponent: string | null) => invoke<AttemptRow[]>("attempts", { stat, source, opponent }),

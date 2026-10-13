@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, DrillView, Feedback, Filters, GameMode, HandResult, Meta } from "./api";
+import { api, DrillView, Feedback, Filters, GameMode, HandResult, Meta, ReviewItem } from "./api";
+import { LessonView } from "./LessonView";
+import { TableView } from "./TableView";
 import { Card } from "./Card";
 
 type Mode = "random" | "focused" | "leaks";
@@ -58,6 +60,9 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
   const [result, setResult] = useState<HandResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [timeline, setTimeline] = useState<ReviewItem[]>([]);
+  const [viewing, setViewing] = useState<ReviewItem | null>(null);
+  const refreshTimeline = () => api.review().then(setTimeline).catch(() => setTimeline([]));
 
   useEffect(() => save("gameMode", gameMode), [gameMode]);
   useEffect(() => save("rngOn", rngOn), [rngOn]);
@@ -67,6 +72,8 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
   const show = (v: DrillView) => {
     setDrill(v);
     setFb(null);
+    setViewing(null);
+    refreshTimeline();
     setRoll(rngOn ? 1 + Math.floor(Math.random() * 100) : null);
   };
 
@@ -103,6 +110,15 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
     }
   }, [fb, rngOn]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const replayFrom = async (i: number) => {
+    try {
+      const v = await api.rewind(i);
+      setEvents([]);
+      setResult(null);
+      show(v);
+    } catch (e) { setError(String(e)); }
+  };
+
   const advanceRef = useRef(advance);
   advanceRef.current = advance;
 
@@ -112,6 +128,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
       const f = await api.answer(i, roll);
       setFb(f);
       onAnswered(f);
+      refreshTimeline();
       if (f.continues && drill.actions[i].kind === "fold") {
         // folding ends the hand: resolve it right away instead of showing "Continue"
         const step = await api.continueHand();
@@ -211,23 +228,35 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
               </div>
             </div>
 
-            <div className="table">
-              <div className="seat villain">
-                {drill.villain} · {m(drill.villain_stack_bb)}
-                {result?.villain_hand && <span className="vh">{result.villain_hand.map((c) => <Card key={c} card={c} />)}</span>}
+            <TableView drill={viewing ? viewing.view : drill} result={viewing ? null : result} m={m} t={t} />
+
+            {drill.mode !== "spot" && timeline.length > 0 && (
+              <div className="timeline">
+                {timeline.map((it) => (
+                  <button key={it.index} className={`tl ${it.feedback ? VERDICT_CLASS[it.feedback.verdict] : "open"} ${viewing?.index === it.index ? "sel" : ""}`}
+                    onClick={() => setViewing(viewing?.index === it.index || !it.feedback ? null : it)} title={it.feedback ? `${it.feedback.verdict}` : "current decision"}>
+                    {it.index + 1}. {it.view.street}{it.feedback ? ` · ${it.feedback.verdict}` : " · now"}
+                  </button>
+                ))}
+                <span className="tl-hint">click a decision to look back</span>
               </div>
-              <div className="pot">Pot {m(handOver && result ? result.pot_bb : drill.pot_bb)}</div>
-              <div className="board">{(handOver && result ? result.board : drill.board).map((c) => <Card key={c} card={c} size="lg" />)}</div>
-              <div className="line">{drill.line.length ? t(drill.line.join(" → ")) : `${drill.street === "flop" ? "Flop" : "Turn"}: you act first`}</div>
-              <div className="hero">
-                <div className="hand">{drill.hand.map((c) => <Card key={c} card={c} size="lg" />)}</div>
-                <div className="seat">You: {drill.hero} ({drill.hero_in_position ? "in position" : "out of position"}) · {m(drill.hero_stack_bb)}</div>
+            )}
+
+            {viewing && viewing.feedback && (
+              <div className="feedback viewing">
+                <div className="viewing-head">Looking back at decision {viewing.index + 1} ({viewing.view.street}): you chose <b>{t(viewing.view.actions[viewing.feedback.chosen].label)}</b></div>
+                <div className={`verdict ${VERDICT_CLASS[viewing.feedback.verdict]}`}><span className="v">{viewing.feedback.verdict}</span><span>{viewing.feedback.score.ev_loss_bb < 0.005 ? "no EV lost" : `lost ${m(viewing.feedback.score.ev_loss_bb, 2)} (${viewing.feedback.score.ev_loss_pct.toFixed(1)}% of pot)`}</span></div>
+                <LessonView fb={viewing.feedback} t={t} />
+                <div className="row-btns">
+                  <button className="primary" onClick={() => replayFrom(viewing.index)}>Replay from here</button>
+                  <button className="mini" onClick={() => setViewing(null)}>Back to the hand</button>
+                </div>
               </div>
-            </div>
+            )}
 
             {events.length > 0 && <div className="events">{t(events.join(" → "))}</div>}
 
-            {!handOver && (
+            {!handOver && !viewing && (
               <>
                 <div className="prompt">
                   {drill.node_type === "facing a bet" || drill.node_type === "facing a raise" ? `Facing ${m(drill.to_call_bb)} to call.` : drill.node_type === "checked to" ? "Checked to you." : "You're first to act."} What do you do?
@@ -249,7 +278,7 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
               </>
             )}
 
-            {fb && (
+            {fb && !viewing && (
               <div className="feedback">
                 <div className={`verdict ${VERDICT_CLASS[fb.verdict]}`}>
                   <span className="v">{fb.verdict}</span>
@@ -272,11 +301,38 @@ export function Drill({ meta, m, t, redrill, onRedrillDone, onAnswered }: {
                     ))}
                   </tbody>
                 </table>
-                <p className="reason">{t(fb.reason)}</p>
+                <LessonView fb={fb} t={t} />
                 {result && <div className={`result ${result.hero_won === true ? "won" : result.hero_won === false ? "lost" : ""}`}>{t(result.summary)}</div>}
-                {fb.continues && !result
-                  ? <button className="primary" disabled={busy} onClick={advance}>{busy ? "Playing…" : "Continue ↵"}</button>
-                  : <button className="primary" onClick={next}>Next hand ↵</button>}
+                {result && timeline.length > 0 && (
+                  <div className="hand-review">
+                    <h3>Hand review</h3>
+                    <table className="cats">
+                      <thead><tr><th>#</th><th>Street</th><th>Board</th><th>You</th><th>Best</th><th className="num">Lost</th><th>Grade</th><th></th></tr></thead>
+                      <tbody>
+                        {timeline.filter((it) => it.feedback).map((it) => (
+                          <tr key={it.index}>
+                            <td>{it.index + 1}</td>
+                            <td>{it.view.street}</td>
+                            <td>{it.view.board.join(" ")}</td>
+                            <td>{t(it.view.actions[it.feedback!.chosen].label)}</td>
+                            <td>{t(it.view.actions[it.feedback!.score.target].label)}</td>
+                            <td className="num">{m(it.feedback!.score.ev_loss_bb, 2)}</td>
+                            <td className={`vtext ${VERDICT_CLASS[it.feedback!.verdict]}`}>{it.feedback!.verdict}</td>
+                            <td><button className="mini" onClick={() => setViewing(it)}>Review</button></td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                    <div className="hint">Total lost this hand: {m(timeline.reduce((s, it) => s + (it.feedback?.score.ev_loss_bb ?? 0), 0), 2)}. Take your time; nothing moves until you press a button.</div>
+                  </div>
+                )}
+                <div className="row-btns">
+                  {fb.continues && !result
+                    ? <button className="primary" disabled={busy} onClick={advance}>{busy ? "Playing…" : "Continue ↵"}</button>
+                    : <button className="primary" onClick={next}>Next hand ↵</button>}
+                  {(result || drill.mode === "spot") && <button className="mini" onClick={() => replayFrom(0)}>{drill.mode === "spot" ? "Try this spot again" : "Replay hand"}</button>}
+                  {drill.mode !== "spot" && !result && timeline.length > 1 && <button className="mini" onClick={() => replayFrom(timeline.length - 2)}>← Back one decision</button>}
+                </div>
               </div>
             )}
           </>
