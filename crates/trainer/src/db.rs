@@ -44,6 +44,9 @@ pub struct Context {
     /// stored-game action history (JSON) so the spot can be drilled again
     pub history: Option<String>,
     pub hero_cards: Option<String>,
+    /// imported hands: which act in the hand log this decision was
+    #[serde(default)]
+    pub act_index: Option<i64>,
 }
 
 const COLUMNS: &[(&str, &str)] = &[
@@ -87,6 +90,8 @@ const COLUMNS: &[(&str, &str)] = &[
     ("chosen_big", "INTEGER"),
     ("p_big", "REAL"),
     ("faced_big", "INTEGER"),
+    ("act_index", "INTEGER"),
+    ("feedback", "TEXT"),
 ];
 
 /// One leak statistic: how often the player takes an action in a situation, against how
@@ -209,9 +214,19 @@ impl Db {
              CREATE TABLE IF NOT EXISTS import_hand (
                 hand_id TEXT PRIMARY KEY, file TEXT, hand_no INTEGER, played TEXT, hero TEXT, hero_cards TEXT, board TEXT,
                 players INTEGER, hero_pos TEXT, villain TEXT, pot_type TEXT, stack_bb REAL, status TEXT, note TEXT,
-                decisions INTEGER DEFAULT 0, ev_loss REAL DEFAULT 0, net_bb REAL, imported_at INTEGER, job TEXT);
+                decisions INTEGER DEFAULT 0, ev_loss REAL DEFAULT 0, net_bb REAL, imported_at INTEGER, job TEXT, hand_json TEXT, opps TEXT);
              CREATE TABLE IF NOT EXISTS alias (name TEXT PRIMARY KEY, display TEXT NOT NULL);",
         )?;
+        // import_hand columns added after the first release
+        let ih: Vec<String> = conn
+            .prepare("PRAGMA table_info(import_hand)")?
+            .query_map([], |r| r.get::<_, String>(1))?
+            .collect::<std::result::Result<_, _>>()?;
+        for (c, t) in [("job", "TEXT"), ("hand_json", "TEXT"), ("opps", "TEXT")] {
+            if !ih.iter().any(|e| e == c) {
+                conn.execute_batch(&format!("ALTER TABLE import_hand ADD COLUMN {c} {t};"))?;
+            }
+        }
         Ok(Db { conn })
     }
 
@@ -234,16 +249,17 @@ impl Db {
         self.conn.execute(
             "INSERT INTO attempt (ts, source, spot_id, stack, matchup, pot_type, street, texture, hero, in_position, aggressor, node_type, situation,
                 hand, hand_bucket, board, chosen, chosen_kind, best, best_kind, pot_bb, ev_loss_bb, ev_loss_pct, freq_chosen, freq_diff, rare, verdict,
-                p_fold, p_check, p_call, p_aggr, rng, mode, opponent, history, hero_cards, has_big, chosen_big, p_big, faced_big)
+                p_fold, p_check, p_call, p_aggr, rng, mode, opponent, history, hero_cards, has_big, chosen_big, p_big, faced_big, act_index, feedback)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27,
-                ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40)",
+                ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42)",
             params![
                 now, ctx.source, v.spot_id, v.stack, v.matchup, v.pot_type, v.street, v.texture, v.hero, v.hero_in_position as i64,
                 v.hero_is_aggressor as i64, v.node_type, v.situation, v.hand.join(""), format!("{:?}", f.hand_desc.bucket), v.board.join(""),
                 chosen.label, chosen.kind, best.label, best.kind, v.pot_bb, f.score.ev_loss_bb, f.score.ev_loss_pct, f.actions[f.chosen].freq_hand,
                 f.score.freq_diff, f.score.rare as i64, f.verdict, p(&["fold"]), p(&["check"]), p(&["call"]), p(&["bet", "raise", "allin"]),
                 f.score.rng, format!("{:?}", v.mode).to_lowercase(), ctx.opponent, ctx.history, ctx.hero_cards,
-                has_big as i64, chosen_big as i64, if has_big { Some(p_big) } else { None }, faced_big as i64
+                has_big as i64, chosen_big as i64, if has_big { Some(p_big) } else { None }, faced_big as i64,
+                ctx.act_index, serde_json::to_string(f).ok()
             ],
         )?;
         Ok(self.conn.last_insert_rowid())

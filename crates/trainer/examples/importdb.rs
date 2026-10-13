@@ -21,7 +21,7 @@ fn main() -> anyhow::Result<()> {
         let (g, st, note, job) = an.preflop(h, &a[2], &names)?;
         for x in &g { save_graded(&db, x, None)?; }
         let villain = job.as_ref().map(|j| j.villain_display.clone()).unwrap_or_default();
-        save_hand(&db, "log.csv", h, &a[2], &position_of(h, &a[2]), &villain, "", &st, &note, &g)?;
+        save_hand(&db, "log.csv", h, &a[2], &position_of(h, &a[2]), &villain, "", &st, &note, &g, &opponents(h, &a[2], &names))?;
         if let Some(j) = job { save_job(&db, &j)?; jobs.push(j); }
     }
     println!("pending jobs in db: {}", pending_jobs(&db)?.len());

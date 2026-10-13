@@ -4,6 +4,7 @@
 pub mod db;
 pub mod drill;
 pub mod import;
+pub mod quickfire;
 pub mod ranges;
 pub mod reason;
 pub mod scoring;

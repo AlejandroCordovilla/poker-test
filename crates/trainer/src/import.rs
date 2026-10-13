@@ -48,6 +48,9 @@ pub struct Act {
     /// total put in on this street after the action, in dollars
     pub amount: f64,
     pub all_in: bool,
+    /// position of this act in `Hand::acts`
+    #[serde(default)]
+    pub index: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -67,6 +70,9 @@ pub struct Hand {
     pub straddle: bool,
     pub collected: Vec<(String, f64)>,
     pub returned: Vec<(String, f64)>,
+    /// cards shown at showdown
+    #[serde(default)]
+    pub shows: Vec<(String, Vec<String>)>,
 }
 
 fn name_of(re: &Regex, s: &str) -> Option<String> {
@@ -112,7 +118,10 @@ pub fn parse(csv_text: &str) -> Result<Vec<Hand>> {
             continue;
         }
         if e.starts_with("-- ending hand") {
-            if let Some(h) = cur.take() {
+            if let Some(mut h) = cur.take() {
+                for (i, a) in h.acts.iter_mut().enumerate() {
+                    a.index = i;
+                }
                 hands.push(h);
             }
             continue;
@@ -148,25 +157,27 @@ pub fn parse(csv_text: &str) -> Result<Vec<Hand>> {
             if rest.starts_with("posts a small blind") {
                 // blinds are stored as street 9 "posts", not decisions
                 h.sb = Some(n.clone());
-                h.acts.push(Act { street: 9, player: n, kind: Kind::Bet, amount: money(rest), all_in: false });
+                h.acts.push(Act { street: 9, player: n, kind: Kind::Bet, amount: money(rest), all_in: false, index: 0 });
             } else if rest.starts_with("posts a big blind") {
                 h.bb = Some(n.clone());
                 h.bb_size = money(rest);
-                h.acts.push(Act { street: 9, player: n, kind: Kind::Bet, amount: h.bb_size, all_in: false });
+                h.acts.push(Act { street: 9, player: n, kind: Kind::Bet, amount: h.bb_size, all_in: false, index: 0 });
             } else if rest.starts_with("posts a straddle") || rest.contains("posts a missing") || rest.contains("posts a missed") || rest.contains("ante") {
                 h.straddle = true;
             } else if rest.starts_with("folds") {
-                h.acts.push(Act { street, player: n, kind: Kind::Fold, amount: 0.0, all_in });
+                h.acts.push(Act { street, player: n, kind: Kind::Fold, amount: 0.0, all_in, index: 0 });
             } else if rest.starts_with("checks") {
-                h.acts.push(Act { street, player: n, kind: Kind::Check, amount: 0.0, all_in });
+                h.acts.push(Act { street, player: n, kind: Kind::Check, amount: 0.0, all_in, index: 0 });
             } else if rest.starts_with("calls") {
-                h.acts.push(Act { street, player: n, kind: Kind::Call, amount: money(rest), all_in });
+                h.acts.push(Act { street, player: n, kind: Kind::Call, amount: money(rest), all_in, index: 0 });
             } else if rest.starts_with("bets") {
-                h.acts.push(Act { street, player: n, kind: Kind::Bet, amount: money(rest), all_in });
+                h.acts.push(Act { street, player: n, kind: Kind::Bet, amount: money(rest), all_in, index: 0 });
             } else if rest.starts_with("raises") {
-                h.acts.push(Act { street, player: n, kind: Kind::Raise, amount: money(rest), all_in });
+                h.acts.push(Act { street, player: n, kind: Kind::Raise, amount: money(rest), all_in, index: 0 });
             } else if rest.starts_with("collected") {
                 h.collected.push((n, money(rest)));
+            } else if rest.starts_with("shows") {
+                h.shows.push((n, cards_in(rest).iter().map(|&c| card_to_string(c)).collect()));
             }
         }
     }
@@ -222,6 +233,8 @@ fn nearest_stack(bb: f64) -> u32 {
 pub struct Graded {
     pub view: DrillView,
     pub fb: Feedback,
+    /// index of the hero's act in `Hand::acts`
+    pub act_index: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -399,7 +412,7 @@ impl Analyzer {
                         };
                         let hand_desc = HandDesc { made: hand169::name(cls), draw: None, bucket: Bucket::Medium };
                         let _ = &mut rng;
-                        graded.push(Graded { view, fb: Feedback { chosen, verdict: score.verdict.label().into(), score, actions: acts, hand_desc, equity: 0.0, reason, lesson: None, continues: false } });
+                        graded.push(Graded { view, fb: Feedback { chosen, verdict: score.verdict.label().into(), score, actions: acts, hand_desc, equity: 0.0, reason, lesson: None, continues: false }, act_index: Some(a.index) });
                     }
                 }
             }
@@ -629,7 +642,7 @@ pub fn analyze_postflop(job: &PostJob, max_gb: f64) -> Result<(Vec<Graded>, Stri
                     fb.reason = format!("(You put in {real:.1}bb; graded as {tree:.1}bb, the nearest size in the tree.) {}", fb.reason);
                 }
             }
-            graded.push(Graded { view, fb });
+            graded.push(Graded { view, fb, act_index: Some(a.index) });
         }
         let before = game.total_bet_amount();
         let who = if p == 0 { job.info.oop.clone() } else { job.info.ip.clone() };
@@ -668,7 +681,7 @@ pub fn net_bb(h: &Hand, hero: &str) -> f64 {
 }
 
 pub fn save_graded(db: &Db, g: &Graded, opponent: Option<&str>) -> Result<()> {
-    db.record(&g.view, &g.fb, &Context { source: "import".into(), opponent: opponent.map(String::from), history: None, hero_cards: None })?;
+    db.record(&g.view, &g.fb, &Context { source: "import".into(), opponent: opponent.map(String::from), history: None, hero_cards: None, act_index: g.act_index.map(|i| i as i64) })?;
     Ok(())
 }
 
@@ -725,6 +738,7 @@ mod tests {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HandRow {
+    pub opps: String,
     pub hand_id: String,
     pub hand_no: i64,
     pub played: String,
@@ -740,12 +754,30 @@ pub struct HandRow {
     pub net_bb: f64,
 }
 
+/// True if the hand is already imported with its full log (older imports without it are
+/// redone so the replayer and results have everything).
 pub fn hand_exists(db: &Db, hand_id: &str) -> Result<bool> {
-    Ok(db.conn().query_row("SELECT COUNT(*) FROM import_hand WHERE hand_id = ?1", [hand_id], |r| r.get::<_, i64>(0))? > 0)
+    let n: i64 = db.conn().query_row("SELECT COUNT(*) FROM import_hand WHERE hand_id = ?1 AND hand_json IS NOT NULL", [hand_id], |r| r.get(0))?;
+    if n == 0 {
+        db.conn().execute("DELETE FROM attempt WHERE spot_id = ?1", [format!("pokernow:{hand_id}")])?;
+        db.conn().execute("DELETE FROM import_hand WHERE hand_id = ?1", [hand_id])?;
+    }
+    Ok(n > 0)
+}
+
+/// Players who were still in at the end (or showed), excluding the hero, by display name.
+pub fn opponents(h: &Hand, hero: &str, names: &HashMap<String, String>) -> Vec<String> {
+    let folded: std::collections::HashSet<&str> = h.acts.iter().filter(|a| a.kind == Kind::Fold).map(|a| a.player.as_str()).collect();
+    h.seats
+        .iter()
+        .map(|s| s.1.as_str())
+        .filter(|p| *p != hero && !folded.contains(p) && h.acts.iter().any(|a| &a.player == p))
+        .map(|p| names.get(p).cloned().unwrap_or(p.to_string()))
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn save_hand(db: &Db, file: &str, h: &Hand, hero: &str, hero_pos: &str, villain: &str, pot_type: &str, status: &str, note: &str, graded: &[Graded]) -> Result<()> {
+pub fn save_hand(db: &Db, file: &str, h: &Hand, hero: &str, hero_pos: &str, villain: &str, pot_type: &str, status: &str, note: &str, graded: &[Graded], opps: &[String]) -> Result<()> {
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs() as i64;
     let cards = h.hero_cards.map(|(a, b)| format!("{}{}", card_to_string(a.max(b)), card_to_string(a.min(b)))).unwrap_or_default();
     let board: String = h.board.iter().map(|&c| card_to_string(c)).collect();
@@ -755,6 +787,7 @@ pub fn save_hand(db: &Db, file: &str, h: &Hand, hero: &str, hero_pos: &str, vill
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
         rusqlite::params![h.id, file, h.no, h.played, hero, cards, board, h.seats.len() as i64, hero_pos, villain, pot_type, 0.0, status, note, graded.len() as i64, loss, net_bb(h, hero), now],
     )?;
+    db.conn().execute("UPDATE import_hand SET hand_json = ?2, opps = ?3 WHERE hand_id = ?1", rusqlite::params![h.id, serde_json::to_string(h)?, opps.join(", ")])?;
     Ok(())
 }
 
@@ -785,7 +818,7 @@ pub fn finish_hand(db: &Db, hand_id: &str, status: &str, note: &str, graded: &[G
 
 pub fn list_hands(db: &Db) -> Result<Vec<HandRow>> {
     let mut st = db.conn().prepare(
-        "SELECT hand_id, hand_no, played, hero_cards, board, hero_pos, villain, pot_type, status, note, decisions, ev_loss, COALESCE(net_bb, 0)
+        "SELECT hand_id, hand_no, played, hero_cards, board, hero_pos, villain, pot_type, status, note, decisions, ev_loss, COALESCE(net_bb, 0), COALESCE(opps, '')
          FROM import_hand ORDER BY played DESC, hand_no DESC",
     )?;
     let rows = st
@@ -804,6 +837,7 @@ pub fn list_hands(db: &Db) -> Result<Vec<HandRow>> {
                 decisions: r.get(10)?,
                 ev_loss: r.get(11)?,
                 net_bb: r.get(12)?,
+                opps: r.get(13)?,
             })
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
@@ -841,6 +875,34 @@ pub fn hand_decisions(db: &Db, hand_id: &str) -> Result<Vec<DecisionRow>> {
         })?
         .collect::<std::result::Result<Vec<_>, _>>()?;
     Ok(rows)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ReplayDecision {
+    pub act_index: usize,
+    pub feedback: Feedback,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Replay {
+    pub hand: Hand,
+    pub hero: String,
+    /// (player, position) in preflop order
+    pub positions: Vec<(String, String)>,
+    pub names: HashMap<String, String>,
+    pub decisions: Vec<ReplayDecision>,
+}
+
+pub fn replay(db: &Db, hand_id: &str) -> Result<Replay> {
+    let (json, hero): (Option<String>, String) = db.conn().query_row("SELECT hand_json, hero FROM import_hand WHERE hand_id = ?1", [hand_id], |r| Ok((r.get(0)?, r.get(1)?)))?;
+    let hand: Hand = serde_json::from_str(&json.ok_or_else(|| anyhow!("this hand was imported before replays existed: import the log again"))?)?;
+    let mut st = db.conn().prepare("SELECT act_index, feedback FROM attempt WHERE spot_id = ?1 AND act_index IS NOT NULL AND feedback IS NOT NULL ORDER BY id")?;
+    let decisions = st
+        .query_map([format!("pokernow:{hand_id}")], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?)))?
+        .filter_map(|x| x.ok())
+        .filter_map(|(i, f)| serde_json::from_str(&f).ok().map(|feedback| ReplayDecision { act_index: i as usize, feedback }))
+        .collect();
+    Ok(Replay { positions: positions(&hand).unwrap_or_default(), names: aliases(db)?, hand, hero, decisions })
 }
 
 pub fn aliases(db: &Db) -> Result<HashMap<String, String>> {

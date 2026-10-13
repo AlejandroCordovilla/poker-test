@@ -122,3 +122,10 @@ export const rangeApi = {
   task: (args: { kind: "preflop" | "flop"; table?: number; stack: number; scenario?: string; matchup?: string; potType?: string; who?: string }) =>
     invoke<RangeTask>("range_task", args),
 };
+
+export type Quiz = { id: number; table: number; stack: number; scenario: string; situation: string; kind: string; seat: string; hand: string[]; class: string; actions: string[]; kinds: string[]; pot_bb: number; to_call_bb: number };
+export type QuizResult = { chosen: number; best: number; verdict: string; ev_loss_bb: number; ev: number[]; freq: number[]; why: string };
+export const quizApi = {
+  deal: (table: number, stack: number, kinds: string[]) => invoke<Quiz>("quiz_deal", { table, stack, kinds }),
+  answer: (index: number) => invoke<QuizResult>("quiz_answer", { index }),
+};

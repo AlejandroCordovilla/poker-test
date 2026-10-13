@@ -12,3 +12,4 @@ serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
 trainer = { path = "../../crates/trainer" }
+poker-core = { path = "../../crates/poker-core" }

@@ -5,8 +5,9 @@ use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::Mutex;
 use trainer::db::{AttemptRow, Context, Db, LeakReport, Summary};
-use trainer::drill::{Mode, Step};
+use trainer::drill::{Mode, ReviewItem, Step};
 use trainer::import;
+use poker_core::rng as poker_core_rng;
 use trainer::ranges::{self, RangeTask};
 use trainer::{DrillView, Engine, Feedback, Filters};
 
@@ -16,6 +17,7 @@ struct AppState {
     analyzer: Mutex<import::Analyzer>,
     jobs: std::sync::mpsc::Sender<import::PostJob>,
     import_progress: std::sync::Arc<Mutex<ImportProgress>>,
+    quiz: Mutex<(Option<trainer::quickfire::Quiz>, poker_core_rng::Rng)>,
 }
 
 #[derive(Serialize, Clone, Default)]
@@ -89,7 +91,7 @@ fn answer(state: tauri::State<AppState>, index: usize, rng: Option<u32>) -> Resu
     let view = e.current().cloned().ok_or("no drill in progress")?;
     let (history, hero_cards) = e.current_context().ok_or("no drill in progress")?;
     let fb = e.answer(index, rng).map_err(err)?;
-    let ctx = Context { source: "drill".into(), opponent: None, history, hero_cards: Some(hero_cards) };
+    let ctx = Context { source: "drill".into(), opponent: None, history, hero_cards: Some(hero_cards), act_index: None };
     state.db.lock().unwrap().record(&view, &fb, &ctx).map_err(err)?;
     Ok(fb)
 }
@@ -97,6 +99,16 @@ fn answer(state: tauri::State<AppState>, index: usize, rng: Option<u32>) -> Resu
 #[tauri::command]
 fn continue_hand(state: tauri::State<AppState>) -> Result<Step, String> {
     state.engine.lock().unwrap().continue_hand().map_err(err)
+}
+
+#[tauri::command]
+fn review(state: tauri::State<AppState>) -> Vec<ReviewItem> {
+    state.engine.lock().unwrap().review()
+}
+
+#[tauri::command]
+fn rewind(state: tauri::State<AppState>, index: usize) -> Result<DrillView, String> {
+    state.engine.lock().unwrap().rewind(index).map_err(err)
 }
 
 #[tauri::command]
@@ -176,7 +188,8 @@ fn import_run(state: tauri::State<AppState>, text: String, file: String, hero: S
         for g in &graded {
             import::save_graded(&db, g, None).map_err(err)?;
         }
-        import::save_hand(&db, &file, h, &hero, &import::position_of(h, &hero), &villain, &pot_type, &status, &note, &graded).map_err(err)?;
+        let opps = import::opponents(h, &hero, &names);
+        import::save_hand(&db, &file, h, &hero, &import::position_of(h, &hero), &villain, &pot_type, &status, &note, &graded, &opps).map_err(err)?;
         res.imported += 1;
         res.preflop_decisions += graded.len();
         if let Some(j) = job {
@@ -187,6 +200,11 @@ fn import_run(state: tauri::State<AppState>, text: String, file: String, hero: S
         }
     }
     Ok(res)
+}
+
+#[tauri::command]
+fn import_replay(state: tauri::State<AppState>, hand_id: String) -> Result<import::Replay, String> {
+    import::replay(&state.db.lock().unwrap(), &hand_id).map_err(err)
 }
 
 #[tauri::command]
@@ -232,6 +250,24 @@ fn range_task(
     let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.subsec_nanos()).unwrap_or(0) as usize;
     let id = pool[nanos % pool.len()].clone();
     ranges::flop_task(&mut e, &id, who.as_deref().unwrap_or("oop")).map_err(err)
+}
+
+#[tauri::command]
+fn quiz_deal(state: tauri::State<AppState>, table: usize, stack: u32, kinds: Vec<String>) -> Result<trainer::quickfire::Quiz, String> {
+    let mut an = state.analyzer.lock().unwrap();
+    let mut q = state.quiz.lock().unwrap();
+    let quiz = trainer::quickfire::deal(&mut an, table, stack, &kinds, &mut q.1).map_err(err)?;
+    q.0 = Some(quiz.clone());
+    Ok(quiz)
+}
+
+#[tauri::command]
+fn quiz_answer(state: tauri::State<AppState>, index: usize) -> Result<trainer::quickfire::QuizResult, String> {
+    let q = state.quiz.lock().unwrap().0.clone().ok_or("no question dealt")?;
+    let r = trainer::quickfire::grade(&q, index).map_err(err)?;
+    let (view, fb) = trainer::quickfire::as_record(&q, &r);
+    state.db.lock().unwrap().record(&view, &fb, &Context { source: "drill".into(), ..Default::default() }).map_err(err)?;
+    Ok(r)
 }
 
 /// Background worker: re-solves queued hands one at a time and stores the grades.
@@ -285,8 +321,9 @@ fn main() {
             analyzer: Mutex::new(import::Analyzer::new(&data)),
             jobs: tx,
             import_progress: progress,
+            quiz: Mutex::new((None, poker_core_rng::Rng::new(seed ^ 0x5151))),
         })
-        .invoke_handler(tauri::generate_handler![meta, new_drill, answer, continue_hand, summary, leaks, attempts, redrill, import_preview, import_run, import_status, import_hands, import_hand_detail, range_task])
+        .invoke_handler(tauri::generate_handler![meta, new_drill, answer, continue_hand, review, rewind, summary, leaks, attempts, redrill, import_preview, import_run, import_status, import_hands, import_hand_detail, range_task, quiz_deal, quiz_answer, import_replay])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
